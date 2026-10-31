@@ -32,7 +32,7 @@ Invalid, Refused, Verify), `Result<T>`; `impl From<Error> for String`. Units: tr
   other command (`UnsupportedProduct`). `identity() -> &Identity{raw,product_code,firmware,build_date}`,
   `is_supported()`, `capabilities() -> &Capabilities` (`features()`, `socd`, `custom_light()`, `poll_rate()`,
   `dead_band()`, `switch_types()`, `music_rhythm()`, `any_key_calibration()`, `win_lock()`, ...),
-  `refresh_capabilities()`, `set_auto_backup(Option<PathBuf>)` (on by default for `open*`), `last_backup()`,
+  `refresh_capabilities()`, `set_auto_backup(Option<PathBuf>)` (on by default for `open*`; `with_link` refuses writes until it is called, None = explicit opt-out for sim/tests), `last_backup()`,
   `with_lock(|kb| ..)` (one flock'ed operation).
 - Lighting: `read_mode_list() -> ModeList{modes,max_speed,max_brightness}` (`selectable()`), `read_effect()`,
   `set_effect(&Effect{mode,brightness,speed,fg,bg,direction,full_color,on})`, `read_active_custom_slot()`,
@@ -96,3 +96,8 @@ Real board: only read commands and `travel` were run (no write sent).
 - `--sim` / `AULA_GUI_SIM=1` = core simulator (scratch profile/backup dirs). `--page N`, `--screenshot PATH`.
 - 93 tests, clippy clean. Installed with scripts/install.sh (~/.local/bin/aula-gui + desktop entry). Real board: only
   read pages and a short live stream were used (open/close ACKed); no write was sent.
+
+## Security fixes ✅
+- Review findings P2-2..P3-10 fixed (1472c03, ce3dc0a, 8c7c66a, 23cf7c9): raw entries preserve-only, full validation before
+  the first write, mandatory auto-backup, locked restore/apply, 0700/0600 + no-clobber files, bounded drain / 4 MiB snapshots,
+  private --sim dir, Confirm-gated calibration. See plans/ISSUES.md. Tests 142/57/96, clippy clean, reinstalled; real board READ-only smoke OK.
