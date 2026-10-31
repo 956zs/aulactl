@@ -1,0 +1,1106 @@
+{
+  "format": "aulactl snapshot",
+  "schema": 1,
+  "created_unix": 1793467298,
+  "device": {
+    "product_code": "SI2825KZHEARGB",
+    "firmware": "3.17.07",
+    "travel": {
+      "max": 340,
+      "min": 8,
+      "unit_num": 1,
+      "high_precision": false
+    }
+  },
+  "lighting": {
+    "effect": {
+      "mode": 0,
+      "brightness": 1,
+      "speed": 2,
+      "fg": "#ff00ff",
+      "bg": "#000000",
+      "direction": 0,
+      "full_color": false,
+      "on": true
+    },
+    "active_custom_slot": 0,
+    "custom": [
+      {
+        "Escape": "#000000",
+        "Digit1": "#000000",
+        "Digit2": "#000000",
+        "Digit3": "#000000",
+        "Digit4": "#000000",
+        "Digit5": "#000000",
+        "Digit6": "#000000",
+        "Digit7": "#000000",
+        "Digit8": "#000000",
+        "Digit9": "#000000",
+        "Digit0": "#000000",
+        "Minus": "#000000",
+        "Equal": "#000000",
+        "Backspace": "#000000",
+        "Tab": "#000000",
+        "KeyQ": "#000000",
+        "KeyW": "#ff0000",
+        "KeyE": "#000000",
+        "KeyR": "#000000",
+        "KeyT": "#000000",
+        "KeyY": "#000000",
+        "KeyU": "#000000",
+        "KeyI": "#000000",
+        "KeyO": "#000000",
+        "KeyP": "#000000",
+        "BracketLeft": "#000000",
+        "BracketRight": "#000000",
+        "Backslash": "#000000",
+        "CapsLock": "#000000",
+        "KeyA": "#ff0000",
+        "KeyS": "#ff0000",
+        "KeyD": "#ff0000",
+        "KeyF": "#000000",
+        "KeyG": "#000000",
+        "KeyH": "#000000",
+        "KeyJ": "#000000",
+        "KeyK": "#000000",
+        "KeyL": "#000000",
+        "Semicolon": "#000000",
+        "Quote": "#000000",
+        "Enter": "#000000",
+        "ShiftLeft": "#000000",
+        "KeyZ": "#000000",
+        "KeyX": "#000000",
+        "KeyC": "#000000",
+        "KeyV": "#000000",
+        "KeyB": "#000000",
+        "KeyN": "#000000",
+        "KeyM": "#000000",
+        "Comma": "#000000",
+        "Period": "#000000",
+        "Slash": "#000000",
+        "ShiftRight": "#000000",
+        "ControlLeft": "#000000",
+        "MetaLeft": "#000000",
+        "AltLeft": "#000000",
+        "Space": "#000000",
+        "AltRight": "#000000",
+        "ContextMenu": "#000000",
+        "ControlRight": "#000000",
+        "KeyFn": "#000000"
+      },
+      {
+        "Escape": "#000000",
+        "Digit1": "#000000",
+        "Digit2": "#000000",
+        "Digit3": "#000000",
+        "Digit4": "#000000",
+        "Digit5": "#000000",
+        "Digit6": "#000000",
+        "Digit7": "#000000",
+        "Digit8": "#000000",
+        "Digit9": "#000000",
+        "Digit0": "#000000",
+        "Minus": "#000000",
+        "Equal": "#000000",
+        "Backspace": "#000000",
+        "Tab": "#000000",
+        "KeyQ": "#0000ff",
+        "KeyW": "#0000ff",
+        "KeyE": "#0000ff",
+        "KeyR": "#0000ff",
+        "KeyT": "#0000ff",
+        "KeyY": "#0000ff",
+        "KeyU": "#0000ff",
+        "KeyI": "#0000ff",
+        "KeyO": "#0000ff",
+        "KeyP": "#0000ff",
+        "BracketLeft": "#0000ff",
+        "BracketRight": "#0000ff",
+        "Backslash": "#0000ff",
+        "CapsLock": "#000000",
+        "KeyA": "#0000ff",
+        "KeyS": "#0000ff",
+        "KeyD": "#0000ff",
+        "KeyF": "#0000ff",
+        "KeyG": "#0000ff",
+        "KeyH": "#0000ff",
+        "KeyJ": "#0000ff",
+        "KeyK": "#0000ff",
+        "KeyL": "#0000ff",
+        "Semicolon": "#0000ff",
+        "Quote": "#0000ff",
+        "Enter": "#000000",
+        "ShiftLeft": "#000000",
+        "KeyZ": "#0000ff",
+        "KeyX": "#0000ff",
+        "KeyC": "#0000ff",
+        "KeyV": "#0000ff",
+        "KeyB": "#0000ff",
+        "KeyN": "#0000ff",
+        "KeyM": "#0000ff",
+        "Comma": "#0000ff",
+        "Period": "#0000ff",
+        "Slash": "#0000ff",
+        "ShiftRight": "#000000",
+        "ControlLeft": "#000000",
+        "MetaLeft": "#000000",
+        "AltLeft": "#000000",
+        "Space": "#000000",
+        "AltRight": "#000000",
+        "ContextMenu": "#000000",
+        "ControlRight": "#000000",
+        "KeyFn": "#000000"
+      }
+    ]
+  },
+  "keymap": {
+    "base": {
+      "Escape": "Escape",
+      "Digit1": "Digit1",
+      "Digit2": "Digit2",
+      "Digit3": "Digit3",
+      "Digit4": "Digit4",
+      "Digit5": "Digit5",
+      "Digit6": "Digit6",
+      "Digit7": "Digit7",
+      "Digit8": "Digit8",
+      "Digit9": "Digit9",
+      "Digit0": "Digit0",
+      "Minus": "Minus",
+      "Equal": "Equal",
+      "Backspace": "Backspace",
+      "Tab": "Tab",
+      "KeyQ": "KeyQ",
+      "KeyW": "KeyW",
+      "KeyE": "KeyE",
+      "KeyR": "KeyR",
+      "KeyT": "KeyT",
+      "KeyY": "KeyY",
+      "KeyU": "KeyU",
+      "KeyI": "KeyI",
+      "KeyO": "KeyO",
+      "KeyP": "KeyP",
+      "BracketLeft": "BracketLeft",
+      "BracketRight": "BracketRight",
+      "Backslash": "Backslash",
+      "CapsLock": "CapsLock",
+      "KeyA": "KeyA",
+      "KeyS": "KeyS",
+      "KeyD": "KeyD",
+      "KeyF": "KeyF",
+      "KeyG": "KeyG",
+      "KeyH": "KeyH",
+      "KeyJ": "KeyJ",
+      "KeyK": "KeyK",
+      "KeyL": "KeyL",
+      "Semicolon": "Semicolon",
+      "Quote": "Quote",
+      "Enter": "Enter",
+      "ShiftLeft": "ShiftLeft",
+      "KeyZ": "KeyZ",
+      "KeyX": "KeyX",
+      "KeyC": "KeyC",
+      "KeyV": "KeyV",
+      "KeyB": "KeyB",
+      "KeyN": "KeyN",
+      "KeyM": "KeyM",
+      "Comma": "Comma",
+      "Period": "Period",
+      "Slash": "Slash",
+      "ShiftRight": "ShiftRight",
+      "ControlLeft": "ControlLeft",
+      "MetaLeft": "MetaLeft",
+      "AltLeft": "AltLeft",
+      "Space": "Space",
+      "AltRight": "AltRight",
+      "ContextMenu": "ContextMenu",
+      "ControlRight": "ControlRight",
+      "KeyFn": "Fn"
+    },
+    "fn": {
+      "Escape": "Default",
+      "Digit1": "Default",
+      "Digit2": "Default",
+      "Digit3": "Default",
+      "Digit4": "Default",
+      "Digit5": "Default",
+      "Digit6": "Default",
+      "Digit7": "Default",
+      "Digit8": "Default",
+      "Digit9": "Default",
+      "Digit0": "Default",
+      "Minus": "Default",
+      "Equal": "Default",
+      "Backspace": "Default",
+      "Tab": "Default",
+      "KeyQ": "Default",
+      "KeyW": "Default",
+      "KeyE": "Default",
+      "KeyR": "Default",
+      "KeyT": "Default",
+      "KeyY": "Default",
+      "KeyU": "Default",
+      "KeyI": "Default",
+      "KeyO": "Default",
+      "KeyP": "Default",
+      "BracketLeft": "Default",
+      "BracketRight": "Default",
+      "Backslash": "Default",
+      "CapsLock": "Default",
+      "KeyA": "Default",
+      "KeyS": "Default",
+      "KeyD": "Default",
+      "KeyF": "Default",
+      "KeyG": "Default",
+      "KeyH": "Default",
+      "KeyJ": "Default",
+      "KeyK": "Default",
+      "KeyL": "Default",
+      "Semicolon": "Default",
+      "Quote": "Default",
+      "Enter": "Default",
+      "ShiftLeft": "Default",
+      "KeyZ": "Default",
+      "KeyX": "Default",
+      "KeyC": "Default",
+      "KeyV": "Default",
+      "KeyB": "Default",
+      "KeyN": "Default",
+      "KeyM": "Default",
+      "Comma": "Default",
+      "Period": "Default",
+      "Slash": "Default",
+      "ShiftRight": "Default",
+      "ControlLeft": "Default",
+      "MetaLeft": "Default",
+      "AltLeft": "Default",
+      "Space": "Default",
+      "AltRight": "Default",
+      "ContextMenu": "Default",
+      "ControlRight": "Default",
+      "KeyFn": "Default"
+    }
+  },
+  "macros": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "advanced": [
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "empty"
+    }
+  ],
+  "trigger": {
+    "Escape": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "Digit1": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "Digit2": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "Digit3": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "Digit4": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "Digit5": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "Digit6": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "Digit7": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "Digit8": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "Digit9": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "Digit0": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "Minus": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "Equal": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "Backspace": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "Tab": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyQ": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyW": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyE": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyR": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyT": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyY": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyU": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyI": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyO": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyP": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "BracketLeft": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "BracketRight": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "Backslash": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "CapsLock": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyA": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyS": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyD": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyF": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyG": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyH": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyJ": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyK": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyL": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "Semicolon": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "Quote": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "Enter": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "ShiftLeft": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyZ": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyX": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyC": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyV": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyB": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyN": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyM": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "Comma": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "Period": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "Slash": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "ShiftRight": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "ControlLeft": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "MetaLeft": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "AltLeft": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "Space": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "AltRight": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "ContextMenu": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "ControlRight": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    },
+    "KeyFn": {
+      "mode": "rapid",
+      "actuation": 100,
+      "press": 50,
+      "release": 50
+    }
+  },
+  "dead_band": {
+    "Escape": {
+      "top": 0,
+      "bottom": 0
+    },
+    "Digit1": {
+      "top": 0,
+      "bottom": 0
+    },
+    "Digit2": {
+      "top": 0,
+      "bottom": 0
+    },
+    "Digit3": {
+      "top": 0,
+      "bottom": 0
+    },
+    "Digit4": {
+      "top": 0,
+      "bottom": 0
+    },
+    "Digit5": {
+      "top": 0,
+      "bottom": 0
+    },
+    "Digit6": {
+      "top": 0,
+      "bottom": 0
+    },
+    "Digit7": {
+      "top": 0,
+      "bottom": 0
+    },
+    "Digit8": {
+      "top": 0,
+      "bottom": 0
+    },
+    "Digit9": {
+      "top": 0,
+      "bottom": 0
+    },
+    "Digit0": {
+      "top": 0,
+      "bottom": 0
+    },
+    "Minus": {
+      "top": 0,
+      "bottom": 0
+    },
+    "Equal": {
+      "top": 0,
+      "bottom": 0
+    },
+    "Backspace": {
+      "top": 0,
+      "bottom": 0
+    },
+    "Tab": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyQ": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyW": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyE": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyR": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyT": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyY": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyU": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyI": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyO": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyP": {
+      "top": 0,
+      "bottom": 0
+    },
+    "BracketLeft": {
+      "top": 0,
+      "bottom": 0
+    },
+    "BracketRight": {
+      "top": 0,
+      "bottom": 0
+    },
+    "Backslash": {
+      "top": 0,
+      "bottom": 0
+    },
+    "CapsLock": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyA": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyS": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyD": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyF": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyG": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyH": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyJ": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyK": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyL": {
+      "top": 0,
+      "bottom": 0
+    },
+    "Semicolon": {
+      "top": 0,
+      "bottom": 0
+    },
+    "Quote": {
+      "top": 0,
+      "bottom": 0
+    },
+    "Enter": {
+      "top": 0,
+      "bottom": 0
+    },
+    "ShiftLeft": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyZ": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyX": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyC": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyV": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyB": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyN": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyM": {
+      "top": 0,
+      "bottom": 0
+    },
+    "Comma": {
+      "top": 0,
+      "bottom": 0
+    },
+    "Period": {
+      "top": 0,
+      "bottom": 0
+    },
+    "Slash": {
+      "top": 0,
+      "bottom": 0
+    },
+    "ShiftRight": {
+      "top": 0,
+      "bottom": 0
+    },
+    "ControlLeft": {
+      "top": 0,
+      "bottom": 0
+    },
+    "MetaLeft": {
+      "top": 0,
+      "bottom": 0
+    },
+    "AltLeft": {
+      "top": 0,
+      "bottom": 0
+    },
+    "Space": {
+      "top": 0,
+      "bottom": 0
+    },
+    "AltRight": {
+      "top": 0,
+      "bottom": 0
+    },
+    "ContextMenu": {
+      "top": 0,
+      "bottom": 0
+    },
+    "ControlRight": {
+      "top": 0,
+      "bottom": 0
+    },
+    "KeyFn": {
+      "top": 0,
+      "bottom": 0
+    }
+  },
+  "switch_types": {
+    "Escape": 1,
+    "Digit1": 1,
+    "Digit2": 1,
+    "Digit3": 1,
+    "Digit4": 1,
+    "Digit5": 1,
+    "Digit6": 1,
+    "Digit7": 1,
+    "Digit8": 1,
+    "Digit9": 1,
+    "Digit0": 1,
+    "Minus": 1,
+    "Equal": 1,
+    "Backspace": 1,
+    "Tab": 1,
+    "KeyQ": 1,
+    "KeyW": 1,
+    "KeyE": 1,
+    "KeyR": 1,
+    "KeyT": 1,
+    "KeyY": 1,
+    "KeyU": 1,
+    "KeyI": 1,
+    "KeyO": 1,
+    "KeyP": 1,
+    "BracketLeft": 1,
+    "BracketRight": 1,
+    "Backslash": 1,
+    "CapsLock": 1,
+    "KeyA": 1,
+    "KeyS": 1,
+    "KeyD": 1,
+    "KeyF": 1,
+    "KeyG": 1,
+    "KeyH": 1,
+    "KeyJ": 1,
+    "KeyK": 1,
+    "KeyL": 1,
+    "Semicolon": 1,
+    "Quote": 1,
+    "Enter": 1,
+    "ShiftLeft": 1,
+    "KeyZ": 1,
+    "KeyX": 1,
+    "KeyC": 1,
+    "KeyV": 1,
+    "KeyB": 1,
+    "KeyN": 1,
+    "KeyM": 1,
+    "Comma": 1,
+    "Period": 1,
+    "Slash": 1,
+    "ShiftRight": 1,
+    "ControlLeft": 1,
+    "MetaLeft": 1,
+    "AltLeft": 1,
+    "Space": 1,
+    "AltRight": 1,
+    "ContextMenu": 1,
+    "ControlRight": 1,
+    "KeyFn": 1
+  },
+  "poll_rate_khz": 8,
+  "socd": {
+    "enabled": false,
+    "pairs": []
+  },
+  "win_lock": {
+    "win": true,
+    "shift_tab": false,
+    "alt_f4": false,
+    "alt_tab": false
+  }
+}
