@@ -111,3 +111,16 @@ Real board: only read commands and `travel` were run (no write sent).
   custom Esc colour and back OK; restore of the pre-write backup = nothing to change, diff matches.
 - Real-device writes verified so far: actuation (one key change+revert), lighting brightness, macros, SOCD power, custom RGB. Not yet on hardware: keymap/SOCD pairs/adv writes, calibration, resets (JS-only), GUI Apply.
 - Owner baseline backup: ~/aula-re/backup-pre-write-2026-11-01.json
+
+## Feed (`aulactl feed`) ✅ (2026-11-01)
+- Contract: docs/feed.md (NDJSON: status/hello/depth/press/release/error). Core `feed` module: `KeyState` (fixed / rt /
+  rt-split press/release mirroring the firmware, raw units), `DepthCoalescer` (per-key N Hz, final 0 at once, 0 = off),
+  `Line` + `hello()` (serde). `hidraw::Device::set_lock_wait`; sim knobs `travel_script`, `unplug_after_script`.
+- CLI `feed [--keys KEYS] [--depth-hz N]`: connect loop (waiting no keyboard/busy every 1 s, 200 ms lock wait),
+  `Keyboard::with_link` without backup dir (writes impossible), hello after the stream opened, lost -> waiting,
+  SIGINT/SIGTERM -> close (ACKed) exit 0, EPIPE exit 0, fatal -> error line + exit 1.
+- Latency tooling: `scripts/latency-check.sh` (usbmon, two runs feed off/on) + analyzer example
+  `crates/aula-core/examples/usbmon_latency.rs` (unit-tested, `test = true`). Only a 2 s dry run done; the real
+  measurement needs the owner typing.
+- Tests 174 core / 7 example / 69 cli / 101 gui, clippy clean, reinstalled. Real board: feed KeyZ,KeyX 5 s (open/close
+  ACKed), busy -> hello once `travel` finished, `info` OK after.
