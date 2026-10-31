@@ -1,0 +1,22 @@
+{
+  "keymap.title": "層",
+  "keymap.layer_base": "基本層",
+  "keymap.layer_fn": "Fn 層",
+  "keymap.help_base": "每個按鍵平常的功能，點按鍵即可修改。",
+  "keymap.help_fn": "按住 Fn 時每個按鍵的功能。淡色按鍵維持韌體的 Fn 功能；鎖定的按鍵由韌體固定。",
+  "keymap.fixed": "固定",
+  "keymap.pick_title": "%2的 %1",
+  "keymap.legend_remapped": "已改變預設功能",
+  "keymap.legend_edited": "尚未寫入",
+  "keymap.legend_fixed": "淡色：韌體功能",
+  "keymap.pending": "%1 個按鍵已變更",
+  "keymap.key": "選取的按鍵",
+  "keymap.click_key": "點鍵盤上的按鍵，即可查看並修改它的功能。",
+  "keymap.physical": "按鍵",
+  "keymap.default": "預設",
+  "keymap.change": "修改",
+  "keymap.reset_title": "預設值",
+  "keymap.reset_help": "將某一層的所有按鍵恢復成原廠功能。按「套用」之前不會寫入。",
+  "keymap.reset_base": "重設基本層",
+  "keymap.reset_fn": "重設 Fn 層"
+}

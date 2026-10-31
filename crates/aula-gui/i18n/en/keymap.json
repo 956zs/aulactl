@@ -1,0 +1,22 @@
+{
+  "keymap.title": "Layers",
+  "keymap.layer_base": "Base layer",
+  "keymap.layer_fn": "Fn layer",
+  "keymap.help_base": "What each key does normally. Click a key to change it.",
+  "keymap.help_fn": "What each key does while Fn is held. Dimmed keys keep their firmware Fn function; locked keys are fixed by the firmware.",
+  "keymap.fixed": "fixed",
+  "keymap.pick_title": "%1 on the %2",
+  "keymap.legend_remapped": "Changed from default",
+  "keymap.legend_edited": "Not yet written",
+  "keymap.legend_fixed": "Faded: firmware function",
+  "keymap.pending": "%1 keys changed",
+  "keymap.key": "Selected key",
+  "keymap.click_key": "Click a key on the keyboard to see and change what it does.",
+  "keymap.physical": "Key",
+  "keymap.default": "Default",
+  "keymap.change": "Change",
+  "keymap.reset_title": "Defaults",
+  "keymap.reset_help": "Set every key of a layer back to its factory function. Nothing is written until you apply.",
+  "keymap.reset_base": "Reset base layer",
+  "keymap.reset_fn": "Reset Fn layer"
+}
