@@ -17,3 +17,5 @@ plus own small improvements. Private repo 956zs/aulactl.
 
 ## Progress
 - 🔄 Task 1 protocol research -> docs/protocol.md
+- ✅ Task 1 protocol research -> docs/protocol.md (product code SI2825KZHEARGB, fw V3.17.07; no onboard profiles; calibration/reset/adv-key writes JS-only)
+- 🔄 Task 2/3 plan written (plans/PLAN.md); phase A core
