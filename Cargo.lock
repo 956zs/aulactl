@@ -43,6 +43,7 @@ version = "0.1.0"
 dependencies = [
  "aula-core",
  "libc",
+ "serde_json",
 ]
 
 [[package]]

@@ -1,5 +1,6 @@
 mod args;
 mod device;
+mod feed;
 mod keys;
 mod light;
 mod macro_text;
@@ -49,6 +50,9 @@ actuation
   pollrate [1|2|4|8]            show or set the poll rate in kHz (the keyboard restarts)
   travel [KEYS] [--raw] [--seconds N]
                                 live key depth on a keyboard map; Ctrl-C stops
+  feed [--keys KEYS] [--depth-hz N]
+                                live key depth and press/release as JSON lines for other programs
+                                (docs/feed.md); waits for the keyboard, SIGINT/SIGTERM stop
   calibrate --yes               any-key calibration: press every key fully, Enter finishes
   reset triggers --yes          every key's actuation and rapid trigger back to factory
   reset factory --yes           factory reset of the whole keyboard
@@ -188,6 +192,10 @@ fn run(mut args: Vec<String>) -> Result<(), String> {
         [] | ["-h" | "--help" | "help"] => return say(&mut stdout, USAGE),
         ["list"] => return cmd_list(&mut stdout),
         ["keymap", "codes", rest @ ..] => return keys::codes(&mut stdout, rest),
+        ["feed", rest @ ..] => {
+            drop(stdout);
+            return feed::run(device, rest);
+        }
         ["profile", "list" | "show" | "delete", ..] => {
             return device::profile_offline(&mut stdout, None, &args[1..])
         }

@@ -29,6 +29,8 @@ code it reports and refuses to write to anything else.
   toggle), SOCD pairs, win-lock options
 - Lighting: effects, brightness/speed/direction/colours, per-key colours in two custom slots, music rhythm
 - Live key travel (terminal map or GUI heatmap with peak hold), key tester, any-key calibration
+- `aulactl feed`: live key depth and press/release as JSON lines for other programs (e.g. an on-screen key
+  overlay); contract in [docs/feed.md](docs/feed.md)
 - Backup / restore / diff, host-side named profiles
 
 ## Install

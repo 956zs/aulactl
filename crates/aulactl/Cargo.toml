@@ -10,4 +10,5 @@ aula-core.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 aula-core = { workspace = true, features = ["sim"] }
