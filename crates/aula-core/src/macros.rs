@@ -58,7 +58,8 @@ pub struct MacroEvent {
     pub input: MacroInput,
     /// true = press, false = release.
     pub down: bool,
-    /// Wait after this event, in ms.
+    /// Wait after this event, in ms. The last event's delay is not stored (always written as 0, like the
+    /// official driver).
     pub delay_ms: u16,
 }
 
@@ -94,6 +95,20 @@ impl Macro {
         }
         Ok(())
     }
+
+    /// The macro as the board stores it: the last event's delay is 0.
+    pub fn normalized(&self) -> Macro {
+        let mut m = self.clone();
+        if let Some(last) = m.events.last_mut() {
+            last.delay_ms = 0;
+        }
+        m
+    }
+}
+
+/// Whether two slots hold the same macro once stored (`Macro::normalized`).
+pub fn same_on_board(a: Option<&Macro>, b: Option<&Macro>) -> bool {
+    a.map(Macro::normalized) == b.map(Macro::normalized)
 }
 
 /// Decodes a slot image. All `0xFF` (never written), all zero (written empty) or an event length of 0
@@ -136,6 +151,7 @@ pub fn decode(image: &[u8]) -> Result<Option<Macro>> {
 }
 
 /// Encodes a slot image; `None` is the all-zero image the official driver writes for unused slots.
+/// The last event's delay is written as 0 (each event's delay is the wait before the next one).
 pub fn encode(m: Option<&Macro>) -> Result<Vec<u8>> {
     let mut img = vec![0u8; SLOT_LEN];
     let Some(m) = m else { return Ok(img) };
@@ -152,7 +168,8 @@ pub fn encode(m: Option<&Macro>) -> Result<Vec<u8>> {
         let at = HEADER_LEN + 4 * i;
         img[at] = code;
         img[at + 1] = (e.down as u8) << 4 | ty;
-        img[at + 2..at + 4].copy_from_slice(&e.delay_ms.to_be_bytes());
+        let delay = if i + 1 == m.events.len() { 0 } else { e.delay_ms };
+        img[at + 2..at + 4].copy_from_slice(&delay.to_be_bytes());
     }
     Ok(img)
 }
@@ -245,7 +262,8 @@ mod tests {
         assert_eq!(&img[..6], &[0x81, 1, 0, 248, 0xff, 0xff]);
         assert_eq!(&img[8..12], &[1, 0x11, 0xff, 0xff]);
         assert_eq!(&img[12..16], &[1, 0x01, 0xff, 0xff]);
-        assert_eq!(decode(&img).unwrap().unwrap(), m);
+        assert_eq!(&img[HEADER_LEN + 4 * (MAX_EVENTS - 1)..][..4], &[1, 0x01, 0, 0], "last delay 0");
+        assert_eq!(decode(&img).unwrap().unwrap(), m.normalized());
     }
 
     #[test]
@@ -271,6 +289,21 @@ mod tests {
         assert_eq!(m.events[0].delay_ms, 30);
         assert!(simple_sequence(0, &[], 5).events.is_empty());
         assert!(check_slot(9).is_ok() && check_slot(10).is_err());
+    }
+
+    #[test]
+    fn last_delay_is_written_as_zero() {
+        let mut m = simple_sequence(0, &[Usage(4)], 30);
+        m.events[1].delay_ms = 500;
+        let img = encode(Some(&m)).unwrap();
+        assert_eq!(&img[8..16], &[4, 0x10, 0, 30, 4, 0x00, 0, 0]);
+        assert_eq!(decode(&img).unwrap().unwrap(), m.normalized());
+        assert_eq!(m.normalized().events[0].delay_ms, 30, "only the last delay changes");
+        assert!(same_on_board(Some(&m), Some(&m.normalized())));
+        assert!(!same_on_board(Some(&m), None));
+        assert!(same_on_board(None, None));
+        let single = Macro { events: vec![m.events[0]], ..m.clone() };
+        assert_eq!(&encode(Some(&single)).unwrap()[8..12], &[4, 0x10, 0, 0]);
     }
 
     #[test]

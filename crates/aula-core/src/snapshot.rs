@@ -179,9 +179,7 @@ pub struct ApplyReport {
 /// Tables of `new` that differ from `old`, by name (in apply order).
 pub fn changed_tables(new: &Snapshot, old: &Snapshot) -> Vec<String> {
     let mut v = Vec::new();
-    if new.lighting.effect != old.lighting.effect {
-        v.push("lighting effect".to_string());
-    }
+    // custom slots before the effect: writing a slot switches the board to the Custom effect (protocol 5.5)
     if let (Some(n), Some(o)) = (&new.lighting.custom, &old.lighting.custom) {
         // Custom mode shows the slot written last (protocol 5.5): the other slot first, then the active one,
         // which is rewritten even when unchanged so writing the other slot does not switch the shown slot.
@@ -195,10 +193,15 @@ pub fn changed_tables(new: &Snapshot, old: &Snapshot) -> Vec<String> {
             v.push(format!("custom colours slot {active}"));
         }
     }
-    for s in 0..macros::SLOTS as usize {
-        if new.macros.get(s) != old.macros.get(s) {
-            v.push(format!("macro slot {s}"));
-        }
+    if new.lighting.effect != old.lighting.effect {
+        v.push("lighting effect".to_string());
+    }
+    // the board only stores macros written as a whole 0..9 sequence (protocol 7): one table
+    let macro_changed = (0..macros::SLOTS as usize).any(|s| {
+        !macros::same_on_board(new.macros.get(s).and_then(|m| m.as_ref()), old.macros.get(s).and_then(|m| m.as_ref()))
+    });
+    if macro_changed {
+        v.push("macros".into());
     }
     if new.advanced != old.advanced {
         v.push("advanced keys".into());
@@ -253,7 +256,7 @@ fn validate<L: Link>(kb: &mut Keyboard<L>, new: &Snapshot, old: &Snapshot, table
         crate::keymap::check_raw_kept(map, was).map_err(|e| Error::Invalid(format!("{} layer: {e}", layer.name())))?;
     }
     for (s, m) in new.macros.iter().enumerate() {
-        if old.macros.get(s) != Some(m) {
+        if !macros::same_on_board(m.as_ref(), old.macros.get(s).and_then(|m| m.as_ref())) {
             macros::encode(m.as_ref()).map_err(|e| Error::Invalid(format!("macro slot {s}: {e}")))?;
         }
     }
@@ -317,10 +320,21 @@ pub(crate) fn apply<L: Link>(kb: &mut Keyboard<L>, new: &Snapshot, old: &Snapsho
     let tables = changed_tables(new, old);
     validate(kb, new, old, &tables)?;
     let mut report = ApplyReport::default();
+    let writes_custom = tables.iter().any(|t| t.starts_with("custom colours slot "));
+    let writes_effect = tables.iter().any(|t| t == "lighting effect");
     kb.with_lock(|kb| {
+        // the effect as it was, put back after the custom slots when the snapshot does not change it
+        let mut effect_before = if writes_custom && !writes_effect { Some(kb.read_effect()?) } else { None };
         for t in &tables {
+            // custom slots come first
+            if !t.starts_with("custom colours slot ") {
+                if let Some(before) = effect_before.take() {
+                    kb.restore_effect(&before)?;
+                }
+            }
             match t.as_str() {
                 "lighting effect" => kb.set_effect(&new.lighting.effect)?,
+                "macros" => kb.write_macros(&new.macros)?,
                 "advanced keys" => {
                     let slots: Vec<(u8, AdvancedKey)> = (0..new.advanced.len())
                         .filter(|s| old.advanced.get(*s) != new.advanced.get(*s))
@@ -351,19 +365,19 @@ pub(crate) fn apply<L: Link>(kb: &mut Keyboard<L>, new: &Snapshot, old: &Snapsho
                 other => {
                     if let Some(s) = other.strip_prefix("custom colours slot ") {
                         let s: u8 = s.parse().expect("own label");
-                        kb.write_custom_colors(s, &new.lighting.custom.as_ref().expect("checked")[s as usize])?;
+                        kb.write_custom_table(s, &new.lighting.custom.as_ref().expect("checked")[s as usize])?;
                         if s == new.lighting.active_custom_slot {
                             kb.verify_active_custom_slot(s)?;
                         }
-                    } else if let Some(s) = other.strip_prefix("macro slot ") {
-                        let s: u8 = s.parse().expect("own label");
-                        kb.write_macro(s, new.macros[s as usize].as_ref())?;
                     } else {
                         unreachable!("unknown table {other}");
                     }
                 }
             }
             report.written.push(t.clone());
+        }
+        if let Some(before) = effect_before {
+            kb.restore_effect(&before)?;
         }
         Ok(())
     })?;

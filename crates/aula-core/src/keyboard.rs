@@ -33,6 +33,9 @@ const RGB_PAGE_PAUSE: Duration = Duration::from_millis(5);
 /// How long closing the travel test or stopping calibration waits for the board.
 const CLOSE_TIMEOUT: Duration = Duration::from_millis(500);
 const CALIBRATION_STOP_TIMEOUT: Duration = Duration::from_secs(2);
+/// The SOCD power write has no ACK: the state is read back up to this many times, this far apart.
+const SOCD_POWER_TRIES: usize = 5;
+const SOCD_POWER_PAUSE: Duration = Duration::from_millis(20);
 
 /// A WIN 60 HE (or another `2e3c:c365` board, which only gets identification commands).
 pub struct Keyboard<L: Link = Device> {
@@ -283,6 +286,10 @@ impl<L: Link> Keyboard<L> {
         let list = self.read_mode_list()?;
         e.validate(&list)?;
         self.before_write()?;
+        self.write_effect(e)
+    }
+
+    fn write_effect(&mut self, e: &Effect) -> Result<()> {
         self.with_lock(|kb| {
             kb.exchange(&lighting::music_frame(false), ack(CMD_MUSIC, 0), 1)?;
             kb.send_only(&lighting::effect_frame(e))?;
@@ -292,6 +299,15 @@ impl<L: Link> Keyboard<L> {
             }
             Ok(())
         })
+    }
+
+    /// Writing a custom slot switches the board to the Custom effect (protocol 5.5): puts `before` back when
+    /// the effect now differs from it.
+    pub(crate) fn restore_effect(&mut self, before: &Effect) -> Result<()> {
+        if self.read_effect()? == *before {
+            return Ok(());
+        }
+        self.write_effect(before)
     }
 
     /// Enters or leaves music-rhythm mode (`0x17`). Mode 100 needs a vendor plugin; aulactl only turns it off.
@@ -315,8 +331,18 @@ impl<L: Link> Keyboard<L> {
         lighting::decode_custom(&t)
     }
 
-    /// Writes one custom slot (keys missing from `colors` are black) and reads it back.
+    /// Writes one custom slot (keys missing from `colors` are black) and reads it back. The board switches to
+    /// the Custom effect when a slot is written; the effect from before is put back.
     pub fn write_custom_colors(&mut self, slot: u8, colors: &CustomColors) -> Result<()> {
+        self.with_lock(|kb| {
+            let before = kb.read_effect()?;
+            kb.write_custom_table(slot, colors)?;
+            kb.restore_effect(&before)
+        })
+    }
+
+    /// Writes and reads back one custom slot, leaving the effect as the board sets it (Custom).
+    pub(crate) fn write_custom_table(&mut self, slot: u8, colors: &CustomColors) -> Result<()> {
         lighting::check_slot(slot)?;
         self.require("per-key RGB", Capabilities::custom_light)?;
         let table = lighting::encode_custom(colors)?;
@@ -330,16 +356,19 @@ impl<L: Link> Keyboard<L> {
 
     /// Writes one custom slot without changing which slot Custom mode shows: the board shows the slot written
     /// last (protocol 5.5), so when `slot` is not the active one the active slot is rewritten afterwards.
+    /// The effect from before is put back.
     pub fn write_custom_colors_keep_active(&mut self, slot: u8, colors: &CustomColors) -> Result<()> {
         lighting::check_slot(slot)?;
         self.with_lock(|kb| {
+            let before = kb.read_effect()?;
             let active = kb.read_active_custom_slot()?;
             let shown = if slot == active { None } else { Some(kb.read_custom_colors(active)?) };
-            kb.write_custom_colors(slot, colors)?;
+            kb.write_custom_table(slot, colors)?;
             if let Some(shown) = shown {
-                kb.write_custom_colors(active, &shown)?;
+                kb.write_custom_table(active, &shown)?;
             }
-            kb.verify_active_custom_slot(active)
+            kb.verify_active_custom_slot(active)?;
+            kb.restore_effect(&before)
         })
     }
 
@@ -394,18 +423,54 @@ impl<L: Link> Keyboard<L> {
         self.with_lock(|kb| (0..macros::SLOTS).map(|s| kb.read_macro(s)).collect())
     }
 
-    /// Writes one macro slot (`None` = empty) and reads it back.
+    /// Raw slot images as the board holds them.
+    fn read_macro_images(&mut self) -> Result<Vec<Vec<u8>>> {
+        self.with_lock(|kb| (0..macros::SLOTS).map(|s| kb.read_table(CMD_MACRO, 0x80 | s, macros::TABLE)).collect())
+    }
+
+    /// Writes one macro slot (`None` = empty). The board drops single-slot writes (protocol 7), so every slot
+    /// is written in order 0..9 (the others with the image they hold) and all are read back.
     pub fn write_macro(&mut self, slot: u8, m: Option<&Macro>) -> Result<()> {
         macros::check_slot(slot)?;
         let image = macros::encode(m)?;
         self.before_write()?;
         self.with_lock(|kb| {
-            kb.write_table(CMD_MACRO, slot, macros::TABLE, &image, ack(CMD_MACRO, 0), Duration::ZERO)?;
-            let back = kb.read_table(CMD_MACRO, 0x80 | slot, macros::TABLE)?;
-            if back != image {
-                return Err(Error::Verify(format!("macro slot {slot}")));
+            let mut images = kb.read_macro_images()?;
+            images[slot as usize] = image;
+            kb.write_macro_images(&images)
+        })
+    }
+
+    /// Writes all 10 slots (`None` = empty) in order 0..9 and reads them back. Slots whose macro is already
+    /// stored are rewritten with the board's image; only the others are encoded (and validated).
+    pub fn write_macros(&mut self, slots: &[Option<Macro>]) -> Result<()> {
+        if slots.len() != macros::SLOTS as usize {
+            return Err(Error::Invalid(format!("{} macro slots given, expected {}", slots.len(), macros::SLOTS)));
+        }
+        self.before_write()?;
+        self.with_lock(|kb| {
+            let mut images = kb.read_macro_images()?;
+            for (s, want) in slots.iter().enumerate() {
+                let kept = matches!(macros::decode(&images[s]), Ok(have) if macros::same_on_board(have.as_ref(), want.as_ref()));
+                if !kept {
+                    images[s] = macros::encode(want.as_ref()).map_err(|e| Error::Invalid(format!("macro slot {s}: {e}")))?;
+                }
             }
-            Ok(())
+            kb.write_macro_images(&images)
+        })
+    }
+
+    /// Writes every slot image in order 0..9 (the sequence the board commits), then reads all back.
+    fn write_macro_images(&mut self, images: &[Vec<u8>]) -> Result<()> {
+        self.with_lock(|kb| {
+            for (s, image) in images.iter().enumerate() {
+                kb.write_table(CMD_MACRO, s as u8, macros::TABLE, image, ack(CMD_MACRO, 0), Duration::ZERO)?;
+            }
+            let back = kb.read_macro_images()?;
+            match images.iter().zip(&back).position(|(a, b)| a != b) {
+                Some(s) => Err(Error::Verify(format!("macro slot {s} was not stored"))),
+                None => Ok(()),
+            }
         })
     }
 
@@ -543,8 +608,11 @@ impl<L: Link> Keyboard<L> {
             if !kb.ack_or_timeout(&travel::trigger_reset_frame(confirm), TRIGGER_ACK)? {
                 missing.push("trigger reset");
             }
-            if socd && !kb.ack_or_timeout(&socd::power_frame(false), ack(CMD_SOCD, 0))? {
-                missing.push("SOCD off");
+            if socd {
+                kb.send_only(&socd::power_frame(false))?;
+                if !kb.socd_power_reads(false)? {
+                    missing.push("SOCD off");
+                }
             }
             kb.limits = None;
             Ok(missing)
@@ -630,16 +698,28 @@ impl<L: Link> Keyboard<L> {
         socd::parse_power(&b)
     }
 
+    /// Turns SOCD on or off. The board does not acknowledge this frame (protocol 2.4): the state is read back.
     pub fn set_socd_enabled(&mut self, on: bool) -> Result<()> {
         self.require("SOCD", |c| c.socd)?;
         self.before_write()?;
         self.with_lock(|kb| {
-            kb.exchange(&socd::power_frame(on), ack(CMD_SOCD, 0), 1)?;
-            if kb.read_socd_power()?.enabled != on {
+            kb.send_only(&socd::power_frame(on))?;
+            if !kb.socd_power_reads(on)? {
                 return Err(Error::Verify("SOCD power".into()));
             }
             Ok(())
         })
+    }
+
+    /// Reads `24 02` until it reports `on` (the board gives no ACK to wait for), a few tries.
+    fn socd_power_reads(&mut self, on: bool) -> Result<bool> {
+        for _ in 0..SOCD_POWER_TRIES {
+            if self.read_socd_power()?.enabled == on {
+                return Ok(true);
+            }
+            std::thread::sleep(SOCD_POWER_PAUSE);
+        }
+        Ok(false)
     }
 
     pub fn read_socd_pairs(&mut self) -> Result<Vec<SocdPair>> {

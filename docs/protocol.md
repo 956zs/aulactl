@@ -129,7 +129,8 @@ byte zero.
 | `0x19` macro page (any slot) | `19 00 00 00 00 00` |
 | `0x21` trigger write / travel-test open / close | `21 00 00 00 01 00` [DEV for open/close] |
 | `0x22` advanced-key page | `22 00 00 00 00 00` |
-| `0x24` SOCD power / SOCD data page | `24 00 00 00 00 00` |
+| `0x24` SOCD data page (`24 00 pp`) | `24 00 00 00 00 00` |
+| `0x24` SOCD power (`24 03`) | **none** — the write takes effect but no ACK comes [DEV 2026-11-01]; read `24 02` instead |
 | `0x25` switch-type page | `25 01 00 00 00 00` |
 | `0x26` dead-band page | `26 01 00 00 00 00` |
 
@@ -353,6 +354,11 @@ Paged in **54-byte** pages: pages 0..6 carry 54 bytes (`b[4]=0x36`), page 7 carr
 
 Owner's board: slot 0 has red on idx 46, 68, 69, 70 (W A S D); slot 1 has blue on 34 keys [DEV].
 
+**Writing a slot switches the effect to Custom** [DEV 2026-11-01]: after `09 00` / `09 01` pages (no `07 00`
+sent) `07 01` reads mode 10 (Custom), brightness 4, speed 3. aulactl reads the effect (`07 01`) before a
+custom-slot write and, when it differs afterwards, writes it back (`07 00`) and verifies it; snapshot apply
+writes the custom slots before the effect so the effect ends up as requested.
+
 Host-driven animation: rewriting slot 0 at up to ~60 frames/s while in mode 10 works (Aether-HE does it)
 [?]; it wears nothing observable but each frame is 8 HID writes.
 
@@ -472,6 +478,10 @@ Forward `12 00 08 00`, Back `12 00 10 00`, Wheel up `12 01 01 00`, Wheel down `1
 * **READ** slot n: `19 (0x80|n)` → 5 pages `19 8n 00 pp len data…` [DEV].
 * **WRITE** slot n: 5 frames `19 n 00 pp len data…`; the driver waits for each page's ACK (`19 00 00 00 00`)
   before the next [CAP]. The official driver writes **all 10 slots** on every apply (unused slots all zero).
+* **Single-slot writes are dropped** [DEV 2026-11-01]: writing one slot (5 pages, each ACKed `19 00`) often
+  leaves the slot unchanged on read-back (10/10 failures with single slots in random order). Writing all 10
+  slots in order 0..9 (unchanged slots with their current image) stored every target slot (8/8 runs). aulactl
+  always writes the whole 0..9 sequence and reads all 10 slots back.
 
 ### 7.1 Slot image [JS][CAP]
 
@@ -491,7 +501,8 @@ Event: `[code, (state << 4) | type, delay_hi, delay_lo]`
   code [?]).
 * `state` 1 = press, 0 = release (so byte 1 is `0x10` / `0x00` for keys, `0x11` / `0x01` for mouse).
 * `delay` (ms, BE u16) is the wait **after** this event before the next one; the last event's delay is 0.
-  (The UI stores "delay before step"; the driver shifts by one in both directions.)
+  (The UI stores "delay before step"; the driver shifts by one in both directions: each event gets the next
+  step's delay, the last event 0.) aulactl always writes 0 for the last event.
 
 Limits: 62 events per slot (`(256-8)/4`); the UI caps a macro at 20 key groups. Delay 0..65535 ms. Count
 0..65535.
@@ -769,7 +780,9 @@ Supported when `0x01` reply `b[14] == 1` (WIN 60 HE: yes).
 
 * **READ** `24 02` → `24 02 00 00 06 on x x x hk1 hk2` [DEV]. `on` = 1 enabled. `hk1`/`hk2` are HID-style
   codes the UI only displays as the on-board toggle hotkey; owner's board `fa e5` = **Fn + R-Shift**.
-* **WRITE** `24 03 00 00 01 on` [CAP]. ACK `24 00 …`.
+* **WRITE** `24 03 00 00 01 on` [CAP]. ~~ACK `24 00 …`~~ — on the owner's board the write takes effect but
+  **no ACK** is sent [DEV 2026-11-01] (pair pages `24 00 pp` are ACKed). Don't wait for one: verify by reading
+  `24 02` (`b[5]` = on).
 
 ### 12.2 Pairs
 
@@ -890,6 +903,9 @@ All other indices 0..131 are not keys: zero in every table, never set in masks.
 | 8 | Official macro read path maps mouse codes 0/1/2 → L/M/R while the write path writes 1/2/4 | Vendor inconsistency; follow the write path [?]. |
 | 9 | Aether notes call `21 … 11` "read current onboard preset" and suggest profiles might exist | WIN 60 HE never answers it; profiles are host-side only. |
 | 10 | Keymap read of a never-written board shows the Fn key as `01 00 00 00` | The official driver writes Fn as `01 fa 00 00`; both are accepted by the firmware (the capture board reads back `01 fa`). Write `01 fa`. |
+| 11 | 2.4 / 12.1 (earlier draft): SOCD power write ACKed `24 00` | Real board 2026-11-01: no ACK for `24 03`; verify via `24 02`. |
+| 12 | 7: one slot can be written alone | Real board 2026-11-01: single-slot writes are often dropped; write all 10 slots in order 0..9. |
+| 13 | 5.5: a custom-slot write only changes the table | Real board 2026-11-01: it also switches the effect to Custom (mode 10, brightness 4, speed 3). |
 
 ---
 

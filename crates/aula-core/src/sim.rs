@@ -1,5 +1,7 @@
 //! In-memory WIN 60 HE for tests (`sim` feature): answers every allowed command like the owner's board
-//! (protocol Appendix A) and records what was sent.
+//! (protocol Appendix A) and records what was sent. Firmware quirks found on the real board are modelled:
+//! macro slots are only stored when slots 0..9 are written in order as one sequence (protocol 7), the SOCD
+//! power write gets no ACK (2.4), writing a custom RGB slot switches the effect to Custom (5.5).
 
 use crate::error::{Error, Result};
 use crate::frame::{self, Body, TableSpec, BODY_LEN, MATRIX_KEYS};
@@ -20,6 +22,8 @@ pub struct SimKeyboard {
     pub keymap: [Vec<u8>; 2],
     pub fn_fixed: [u8; 22],
     pub macros: Vec<Vec<u8>>,
+    /// Macro write sequence in progress.
+    pub macro_seq: Option<MacroSeq>,
     pub advanced: Vec<[u8; 40]>,
     pub socd_on: bool,
     pub socd: Vec<u8>,
@@ -42,6 +46,13 @@ pub struct SimKeyboard {
     pub corrupt_next_write: Option<u8>,
     /// When set, every send fails like an unplugged device (`Error::Io`).
     pub io_error: bool,
+}
+
+/// A macro write sequence: the next (slot, page) expected and the images written so far.
+#[derive(Debug, Clone)]
+pub struct MacroSeq {
+    pub next: (u8, u16),
+    pub images: Vec<Vec<u8>>,
 }
 
 impl Default for SimKeyboard {
@@ -83,6 +94,7 @@ impl SimKeyboard {
             keymap: [base, vec![0u8; keymap::TABLE.len]],
             fn_fixed,
             macros: vec![vec![0u8; macros::SLOT_LEN]; macros::SLOTS as usize],
+            macro_seq: None,
             advanced: vec![[0u8; 40]; 40],
             socd_on: false,
             socd: vec![0u8; socd::TABLE.len],
@@ -195,6 +207,8 @@ impl SimKeyboard {
                 self.store_page(0x09, &mut t, lighting::RGB_TABLE, req);
                 self.custom[sel as usize] = t;
                 self.active_slot = sel;
+                // the board switches to the Custom effect (seen as brightness 4 speed 3)
+                self.effect[..3].copy_from_slice(&[lighting::MODE_CUSTOM, 4, 3]);
                 self.reply_ack([0x09, sel, 0, 0, 0, 0]);
             }
             0x17 => {
@@ -217,9 +231,7 @@ impl SimKeyboard {
                 self.reply_pages(0x19, sel, macros::TABLE, &t);
             }
             0x19 => {
-                let mut t = std::mem::take(&mut self.macros[sel as usize]);
-                self.store_page(0x19, &mut t, macros::TABLE, req);
-                self.macros[sel as usize] = t;
+                self.macro_page(sel, req);
                 self.reply_ack([0x19, 0, 0, 0, 0, 0]);
             }
             0x22 if sel == 0x80 => {
@@ -258,10 +270,7 @@ impl SimKeyboard {
                     r[5] = self.socd_on as u8;
                     self.reply(r);
                 }
-                _ => {
-                    self.socd_on = req[5] == 1;
-                    self.reply_ack([0x24, 0, 0, 0, 0, 0]);
-                }
+                _ => self.socd_on = req[5] == 1,
             },
             0x25 => match sel {
                 0 => {
@@ -304,6 +313,26 @@ impl SimKeyboard {
             _ => unreachable!("allowlist"),
         }
         Ok(())
+    }
+
+    /// A macro page is ACKed but only stored when it continues a 0..9 sequence starting at slot 0 page 0;
+    /// the sequence is committed with the last page of slot 9. Anything out of order drops it.
+    fn macro_page(&mut self, slot: u8, req: &Body) {
+        let page = frame::page_of(req);
+        let last_page = (macros::TABLE.pages() - 1) as u16;
+        let mut seq = match self.macro_seq.take() {
+            Some(MacroSeq { next, images }) if next == (slot, page) => images,
+            _ if (slot, page) == (0, 0) => vec![vec![0u8; macros::SLOT_LEN]; macros::SLOTS as usize],
+            _ => return,
+        };
+        let mut t = std::mem::take(&mut seq[slot as usize]);
+        self.store_page(0x19, &mut t, macros::TABLE, req);
+        seq[slot as usize] = t;
+        match (slot, page) {
+            (s, p) if s + 1 == macros::SLOTS && p == last_page => self.macros = seq,
+            (s, p) if p == last_page => self.macro_seq = Some(MacroSeq { next: (s + 1, 0), images: seq }),
+            (s, p) => self.macro_seq = Some(MacroSeq { next: (s, p + 1), images: seq }),
+        }
     }
 
     fn handle_trigger(&mut self, req: &Body) {

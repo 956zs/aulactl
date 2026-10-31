@@ -151,7 +151,7 @@ fn apply_writes_only_changed_tables_and_verifies() {
     let tables = changed_tables(&new, &old);
     assert_eq!(
         tables,
-        vec!["macro slot 0", "advanced keys", "base layer", "trigger", "dead band", "SOCD pairs", "SOCD power", "win-lock"]
+        vec!["macros", "advanced keys", "base layer", "trigger", "dead band", "SOCD pairs", "SOCD power", "win-lock"]
     );
     let changes = diff(&old, &new);
     assert!(changes.iter().any(|c| c.to_string() == "base layer: CapsLock: CapsLock -> Escape"), "{changes:?}");
@@ -663,4 +663,155 @@ fn calibration_ignores_start_echo_and_acks() {
     c.push(body("21 00 00 00 02 0f 04"));
     assert_eq!(c.next_event(Duration::from_millis(1)).unwrap(), Some(CalibrationEvent::Failed(4)));
     assert_eq!(c.stop().unwrap(), Some(CalibrationEvent::Finished));
+}
+
+/// Slot numbers of the macro write pages sent, in order (one entry per page).
+fn macro_write_slots(k: &Keyboard<SimKeyboard>) -> Vec<u8> {
+    writes(k).iter().filter(|b| b[0] == 0x19).map(|b| b[1]).collect()
+}
+
+#[test]
+fn sim_drops_single_macro_slot_writes() {
+    use crate::hidraw::Link;
+    let mut sim = SimKeyboard::owner_board();
+    let image = crate::macros::encode(Some(&simple_sequence(3, &[Usage(4)], 10))).unwrap();
+    for f in crate::macros::TABLE.write_frames(0x19, 3, &image).unwrap() {
+        sim.send(&f).unwrap();
+    }
+    assert_eq!(sim.input.len(), 5, "every page is ACKed");
+    assert_eq!(sim.macros[3], vec![0u8; 256], "a lone slot write is dropped");
+    // 0..9 in order, but a slot repeated in the middle: dropped too
+    for s in [0u8, 1, 1, 2, 3, 4, 5, 6, 7, 8, 9] {
+        for f in crate::macros::TABLE.write_frames(0x19, s, &image).unwrap() {
+            sim.send(&f).unwrap();
+        }
+    }
+    assert_eq!(sim.macros[3], vec![0u8; 256]);
+    for s in 0..10u8 {
+        for f in crate::macros::TABLE.write_frames(0x19, s, &image).unwrap() {
+            sim.send(&f).unwrap();
+        }
+    }
+    assert!(sim.macros.iter().all(|m| *m == image), "a whole 0..9 sequence is stored");
+}
+
+#[test]
+fn macro_writes_rewrite_every_slot_in_order() {
+    let mut k = kb();
+    k.link_mut().macros[5] = vec![0xff; 256]; // never written: kept byte-exact
+    let m9 = simple_sequence(9, &[Usage(4), Usage(5)], 15);
+    k.write_macro(9, Some(&m9)).unwrap();
+    let order: Vec<u8> = (0..10u8).flat_map(|s| [s; 5]).collect();
+    assert_eq!(macro_write_slots(&k), order, "all 10 slots, 0..9, 5 pages each");
+    assert_eq!(k.read_macro(9).unwrap(), Some(m9.clone()));
+    assert_eq!(k.link().macros[5], vec![0xff; 256]);
+    let m3 = simple_sequence(3, &[Usage(6)], 0);
+    k.write_macro(3, Some(&m3)).unwrap();
+    assert_eq!(k.read_macro(3).unwrap(), Some(m3));
+    assert_eq!(k.read_macro(9).unwrap(), Some(m9), "other slots survive");
+    k.write_macro(9, None).unwrap();
+    assert_eq!(k.read_macro(9).unwrap(), None);
+    assert_eq!(macro_write_slots(&k).len(), 150);
+}
+
+#[test]
+fn write_macros_takes_all_slots_and_verifies() {
+    let mut k = kb();
+    let mut want = k.read_macros().unwrap();
+    assert!(matches!(k.write_macros(&want[..9]), Err(Error::Invalid(_))));
+    assert!(writes(&k).is_empty());
+    let mut m = simple_sequence(2, &[Usage(4)], 25);
+    m.events[1].delay_ms = 300; // the last delay is stored as 0
+    want[2] = Some(m.clone());
+    k.write_macros(&want).unwrap();
+    assert_eq!(k.read_macro(2).unwrap(), Some(m.normalized()));
+    // a bad macro in a changed slot is refused before any write
+    let n = writes(&k).len();
+    want[4] = Some(simple_sequence(4, &[Usage(0)], 0));
+    assert!(k.write_macros(&want).is_err());
+    assert_eq!(writes(&k).len(), n);
+    // read-back mismatch
+    want[4] = None;
+    want[2] = Some(simple_sequence(2, &[Usage(7)], 0));
+    k.link_mut().corrupt_next_write = Some(0x19);
+    assert!(matches!(k.write_macros(&want), Err(Error::Verify(_))));
+}
+
+#[test]
+fn apply_writes_all_macro_slots_once() {
+    let mut k = kb();
+    let old = k.read_snapshot().unwrap();
+    let mut new = old.clone();
+    new.macros[3] = Some(simple_sequence(3, &[Usage(4)], 10));
+    new.macros[9] = Some(simple_sequence(9, &[Usage(5)], 10));
+    assert_eq!(changed_tables(&new, &old), vec!["macros"]);
+    k.apply_snapshot(&new, &old).unwrap();
+    assert_eq!(macro_write_slots(&k).len(), 50, "one 0..9 sequence");
+    let after = k.read_snapshot().unwrap();
+    assert!(diff(&after, &new).is_empty());
+    // a last delay that the board does not store is not a change
+    let mut same = after.clone();
+    same.macros[3].as_mut().unwrap().events.last_mut().unwrap().delay_ms = 99;
+    assert!(changed_tables(&same, &after).is_empty());
+}
+
+#[test]
+fn socd_power_has_no_ack_and_is_read_back() {
+    let mut k = kb();
+    k.set_socd_enabled(true).unwrap();
+    assert!(k.link().socd_on);
+    assert!(k.link().input.is_empty(), "the sim sends no ACK to the power write");
+    k.set_socd_enabled(false).unwrap();
+    assert!(!k.link().socd_on);
+    // no read-back: error, not success
+    k.link_mut().mute_cmd = Some(0x24);
+    assert!(matches!(k.set_socd_enabled(true), Err(Error::Timeout(_))));
+}
+
+#[test]
+fn custom_slot_writes_keep_the_effect() {
+    let mut k = kb();
+    let before = k.read_effect().unwrap();
+    assert_ne!(before.mode, crate::lighting::MODE_CUSTOM);
+    let mut c = PerKey::new();
+    c.0.insert(22, Rgb(0, 255, 0));
+    k.write_custom_colors(0, &c).unwrap();
+    assert_eq!(k.read_effect().unwrap(), before, "effect put back after the slot switched it to Custom");
+    k.write_custom_colors_keep_active(1, &c).unwrap();
+    assert_eq!(k.read_effect().unwrap(), before);
+    // Custom with other settings than the firmware picks is put back too
+    let custom = crate::lighting::Effect { mode: crate::lighting::MODE_CUSTOM, brightness: 1, speed: 0, ..before };
+    k.set_effect(&custom).unwrap();
+    k.write_custom_colors(0, &c).unwrap();
+    assert_eq!(k.read_effect().unwrap(), custom);
+}
+
+#[test]
+fn apply_writes_custom_slots_before_the_effect() {
+    let mut k = kb();
+    let old = k.read_snapshot().unwrap();
+    // custom colours only: the effect stays
+    let mut new = old.clone();
+    new.lighting.custom.as_mut().unwrap()[0].0.insert(22, Rgb(1, 1, 1));
+    k.apply_snapshot(&new, &old).unwrap();
+    assert!(diff(&k.read_snapshot().unwrap(), &new).is_empty());
+    // colours and a new effect: the effect is written after the slots and stays as requested
+    let old = k.read_snapshot().unwrap();
+    let mut new = old.clone();
+    new.lighting.custom.as_mut().unwrap()[1].0.insert(22, Rgb(2, 2, 2));
+    new.lighting.effect.mode = 2;
+    new.lighting.effect.brightness = 2;
+    let tables = changed_tables(&new, &old);
+    assert_eq!(tables, vec!["custom colours slot 1", "custom colours slot 0", "lighting effect"]);
+    k.apply_snapshot(&new, &old).unwrap();
+    let after = k.read_snapshot().unwrap();
+    assert!(diff(&after, &new).is_empty(), "{:?}", diff(&after, &new));
+    assert_eq!(after.lighting.active_custom_slot, 0);
+    // custom colours together with other tables: effect put back before them
+    let old = after;
+    let mut new = old.clone();
+    new.lighting.custom.as_mut().unwrap()[0].0.insert(23, Rgb(3, 3, 3));
+    new.win_lock.alt_tab = !old.win_lock.alt_tab;
+    k.apply_snapshot(&new, &old).unwrap();
+    assert!(diff(&k.read_snapshot().unwrap(), &new).is_empty());
 }
