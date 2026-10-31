@@ -6,46 +6,78 @@ use aula_core::frame::{self, Body, CMD_TRIGGER, MASK_LEN, SUB_CALIB_START, SUB_T
 use aula_core::hidraw::{Device, Link};
 use aula_core::layout;
 use aula_core::sim::SimKeyboard;
-use aula_core::Result;
+use aula_core::{Error, Result};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-pub enum GuiLink {
+pub struct GuiLink {
+    kind: LinkKind,
+    /// A send/receive/lock failed with an I/O error: the handle is dead (unplugged, or re-enumerated under the
+    /// same hidrawN) and must be opened again.
+    io_failed: bool,
+}
+
+enum LinkKind {
     Hid(Device),
     Sim(SimLink),
 }
 
+impl GuiLink {
+    pub fn hid(d: Device) -> Self {
+        GuiLink { kind: LinkKind::Hid(d), io_failed: false }
+    }
+
+    pub fn sim(s: SimLink) -> Self {
+        GuiLink { kind: LinkKind::Sim(s), io_failed: false }
+    }
+
+    pub fn io_failed(&self) -> bool {
+        self.io_failed
+    }
+
+    fn note<T>(&mut self, r: Result<T>) -> Result<T> {
+        if matches!(r, Err(Error::Io(_))) {
+            self.io_failed = true;
+        }
+        r
+    }
+}
+
 impl Link for GuiLink {
     fn send(&mut self, body: &Body) -> Result<()> {
-        match self {
-            GuiLink::Hid(d) => d.send(body),
-            GuiLink::Sim(s) => s.send(body),
-        }
+        let r = match &mut self.kind {
+            LinkKind::Hid(d) => d.send(body),
+            LinkKind::Sim(s) => s.send(body),
+        };
+        self.note(r)
     }
 
     fn recv(&mut self, timeout: Duration) -> Result<Option<Body>> {
-        match self {
-            GuiLink::Hid(d) => d.recv(timeout),
-            GuiLink::Sim(s) => s.recv(timeout),
-        }
+        let r = match &mut self.kind {
+            LinkKind::Hid(d) => d.recv(timeout),
+            LinkKind::Sim(s) => s.recv(timeout),
+        };
+        self.note(r)
     }
 
     fn drain(&mut self) -> Result<()> {
-        match self {
-            GuiLink::Hid(d) => d.drain(),
-            GuiLink::Sim(s) => s.drain(),
-        }
+        let r = match &mut self.kind {
+            LinkKind::Hid(d) => d.drain(),
+            LinkKind::Sim(s) => s.drain(),
+        };
+        self.note(r)
     }
 
     fn lock(&mut self) -> Result<()> {
-        match self {
-            GuiLink::Hid(d) => d.lock(),
-            GuiLink::Sim(_) => Ok(()),
-        }
+        let r = match &mut self.kind {
+            LinkKind::Hid(d) => d.lock(),
+            LinkKind::Sim(_) => Ok(()),
+        };
+        self.note(r)
     }
 
     fn unlock(&mut self) {
-        if let GuiLink::Hid(d) = self {
+        if let LinkKind::Hid(d) = &mut self.kind {
             d.unlock();
         }
     }
@@ -188,6 +220,20 @@ mod tests {
         let all = s.calibration_frame();
         let Some(CalibrationEvent::Progress(keys)) = travel::parse_calibration(&all) else { panic!() };
         assert_eq!(keys.len(), layout::KEYS.len());
+    }
+
+    #[test]
+    fn io_errors_mark_the_link_dead() {
+        let board = Arc::new(Mutex::new(SimKeyboard::owner_board()));
+        let mut l = GuiLink::sim(SimLink::new(board.clone()));
+        l.send(&frame::request(0x01, 0)).unwrap();
+        assert!(!l.io_failed());
+        board.lock().unwrap().io_error = true;
+        assert!(matches!(l.send(&frame::request(0x01, 0)), Err(Error::Io(_))));
+        assert!(l.io_failed());
+        board.lock().unwrap().io_error = false;
+        l.send(&frame::request(0x01, 0)).unwrap();
+        assert!(l.io_failed(), "stays dead until reopened");
     }
 
     #[test]

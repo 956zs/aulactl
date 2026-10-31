@@ -22,7 +22,8 @@ ScrollView {
 
     readonly property bool current: StackLayout.isCurrentItem && visible
 
-    onCurrentChanged: if (!current && Device.live) Device.stopLive()
+    // Always sent: Device.live may still be false for a stream that is starting; the worker ignores it when idle.
+    onCurrentChanged: if (!current) Device.stopLive()
 
     // Heat colour for a depth fraction: green (shallow) through yellow to red (bottomed out).
     function rampColor(f) {

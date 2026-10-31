@@ -56,8 +56,8 @@ ApplicationWindow {
                     { label: "nav.lighting", icon: "palette" },
                     { label: "nav.live", icon: "monitoring" }
                 ]
-                // The travel stream belongs to the Live page.
-                onCurrentIndexChanged: if (currentIndex !== window.livePage && Device.live) Device.stopLive()
+                // The travel stream belongs to the Live page (stop sent even if Device.live has not caught up).
+                onCurrentIndexChanged: if (currentIndex !== window.livePage) Device.stopLive()
             }
 
             Rectangle {
@@ -105,11 +105,11 @@ ApplicationWindow {
         }
     }
 
+    // Sent unconditionally: Device.live may lag behind a stream the worker just started; an idle worker
+    // ignores both.
     onClosing: {
-        if (Device.live)
-            Device.stopLive()
-        if (Device.calibrating)
-            Device.stopCalibration()
+        Device.stopLive()
+        Device.stopCalibration()
     }
 
     // --screenshot: grab once the settings are loaded (plus a moment to settle), or after 20 s.

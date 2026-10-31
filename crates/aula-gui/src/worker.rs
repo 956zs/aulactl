@@ -138,16 +138,21 @@ pub struct Settings {
     pub sim: bool,
     pub poll: Duration,
     pub live_publish: Duration,
+    /// Backup and profile directories; None = `Dirs::for_run(sim)`.
+    pub dirs: Option<Dirs>,
+    /// The simulated board (with `sim`); None = a fresh copy of the owner's board.
+    pub sim_board: Option<Arc<Mutex<SimKeyboard>>>,
 }
 
 /// Runs until `Quit`, the command channel closes, or `publish` returns false (the UI object is gone).
 pub fn run(commands: Receiver<Command>, settings: Settings, publish: impl FnMut(Event) -> bool) {
-    let dirs = Dirs::for_run(settings.sim);
+    let dirs = settings.dirs.map_or_else(|| Dirs::for_run(settings.sim), Ok);
+    let sim_board = settings.sim_board;
     let mut w = Worker {
         publish,
         alive: true,
         commands,
-        sim: settings.sim.then(|| Arc::new(Mutex::new(SimKeyboard::owner_board()))),
+        sim: settings.sim.then(|| sim_board.unwrap_or_else(|| Arc::new(Mutex::new(SimKeyboard::owner_board())))),
         dirs,
         kb: None,
         node: None,
@@ -191,6 +196,11 @@ struct Worker<P> {
     poll_error: Option<String>,
     /// The automatic backup already reported.
     announced_backup: Option<PathBuf>,
+}
+
+/// What the Overview page shows as the device node.
+fn node_label(node: Option<&Path>) -> String {
+    node.map_or_else(|| "simulator".into(), |n| n.display().to_string())
 }
 
 fn ms_since(start: Instant) -> u64 {
@@ -298,12 +308,12 @@ impl<P: FnMut(Event) -> bool> Worker<P> {
 
     fn open_keyboard(&self) -> Result<(Keyboard<GuiLink>, Option<PathBuf>), Error> {
         if let Some(board) = &self.sim {
-            let mut kb = Keyboard::with_link(GuiLink::Sim(SimLink::new(board.clone())))?;
+            let mut kb = Keyboard::with_link(GuiLink::sim(SimLink::new(board.clone())))?;
             kb.set_auto_backup(None);
             return Ok((kb, None));
         }
         let info = hidraw::find_devices().into_iter().next().ok_or(Error::NotFound)?;
-        let mut kb = Keyboard::with_link(GuiLink::Hid(Device::open(&info.node)?))?;
+        let mut kb = Keyboard::with_link(GuiLink::hid(Device::open(&info.node)?))?;
         // Before the first write of this handle the whole configuration is saved here. Without a backup
         // directory the core refuses every write.
         if let Ok(d) = &self.dirs {
@@ -325,7 +335,7 @@ impl<P: FnMut(Event) -> bool> Worker<P> {
         let id = kb.identity().clone();
         next.connected = true;
         next.supported = kb.is_supported();
-        next.node = node.as_ref().map(|n| n.display().to_string()).unwrap_or_else(|| "simulator".into());
+        next.node = node_label(node.as_deref());
         next.product_code = id.product_code;
         next.firmware = id.firmware;
         next.build_date = id.build_date;
@@ -385,10 +395,14 @@ impl<P: FnMut(Event) -> bool> Worker<P> {
         }
     }
 
-    /// A UI command: busy while it runs, every failure reported.
+    /// A UI command: busy while it runs, every failure reported. After an I/O error the handle is dropped so
+    /// the next poll opens the board again (also when it came back under the same hidrawN).
     fn command(&mut self, f: impl FnOnce(&mut Self) -> Result<(), String>) {
         self.emit(Event::Busy(true));
         if let Err(e) = f(self) {
+            if self.kb.as_ref().is_some_and(|kb| kb.link().io_failed()) {
+                self.disconnect();
+            }
             self.report(e);
         }
         self.announce_backup();
@@ -480,8 +494,10 @@ impl<P: FnMut(Event) -> bool> Worker<P> {
         for _ in 0..REOPEN_TRIES {
             match self.open_keyboard() {
                 Ok((kb, node)) => {
+                    let next = State { node: node_label(node.as_deref()), ..self.state.clone() };
                     self.kb = Some(kb);
                     self.node = node;
+                    self.publish_state(next);
                     self.emit(Event::Notice("notice.reconnected", String::new()));
                     return Ok(());
                 }
@@ -691,15 +707,131 @@ impl<P: FnMut(Event) -> bool> Worker<P> {
 mod tests {
     use super::*;
 
-    /// Runs a simulator worker on a thread; returns the command sender and the event receiver.
-    fn spawn_sim() -> (Sender<Command>, Receiver<Event>, std::thread::JoinHandle<()>) {
+    /// Per-test backup/profile directory, removed when the test ends.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new() -> Self {
+            static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let n = N.fetch_add(1, Ordering::Relaxed);
+            let d = std::env::temp_dir().join(format!("aula-gui-worker-test-{}-{n}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&d);
+            std::fs::create_dir_all(&d).unwrap();
+            Scratch(d)
+        }
+
+        fn dirs(&self) -> Dirs {
+            Dirs { backups: self.0.join("backups"), profiles: self.0.join("profiles") }
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    struct Sim {
+        tx: Sender<Command>,
+        rx: Receiver<Event>,
+        h: std::thread::JoinHandle<()>,
+        board: Arc<Mutex<SimKeyboard>>,
+        _scratch: Scratch,
+    }
+
+    /// Runs a simulator worker on a thread with its own scratch directory.
+    fn start_sim() -> Sim {
         let (tx, rx) = mpsc::channel();
         let (etx, erx) = mpsc::channel();
+        let scratch = Scratch::new();
+        let board = Arc::new(Mutex::new(SimKeyboard::owner_board()));
+        let settings = Settings {
+            sim: true,
+            poll: Duration::from_millis(100),
+            live_publish: Duration::from_millis(20),
+            dirs: Some(scratch.dirs()),
+            sim_board: Some(board.clone()),
+        };
         let h = std::thread::spawn(move || {
-            let settings = Settings { sim: true, poll: Duration::from_millis(500), live_publish: Duration::from_millis(20) };
             run(rx, settings, move |e| etx.send(e).is_ok());
         });
-        (tx, erx, h)
+        Sim { tx, rx: erx, h, board, _scratch: scratch }
+    }
+
+    /// Like `start_sim`; the scratch directory goes away when the returned guard drops.
+    fn spawn_sim() -> (Sender<Command>, Receiver<Event>, JoinOnDrop) {
+        let s = start_sim();
+        (s.tx, s.rx, JoinOnDrop { h: Some(s.h), _scratch: s._scratch })
+    }
+
+    /// Join handle that also owns the scratch directory (removed after the worker ended).
+    struct JoinOnDrop {
+        h: Option<std::thread::JoinHandle<()>>,
+        _scratch: Scratch,
+    }
+
+    impl JoinOnDrop {
+        fn join(mut self) -> std::thread::Result<()> {
+            self.h.take().expect("joined once").join()
+        }
+    }
+
+    #[test]
+    fn io_error_in_a_command_reopens_the_board() {
+        let s = start_sim();
+        loaded(&s.rx);
+        s.board.lock().unwrap().io_error = true;
+        s.tx.send(Command::BackupNow).unwrap();
+        let gone = wait_for(&s.rx, |e| match e {
+            Event::State(st) => Some(*st),
+            _ => None,
+        });
+        assert!(!gone.connected, "handle dropped");
+        let e = wait_for(&s.rx, |e| match e {
+            Event::Error(m) => Some(m),
+            _ => None,
+        });
+        assert!(e.contains("No such device"), "{e}");
+        s.board.lock().unwrap().io_error = false;
+        let back = loaded(&s.rx);
+        assert!(back.connected && back.snapshot.is_some(), "the next poll opened it again");
+        s.tx.send(Command::Quit).unwrap();
+        s.h.join().unwrap();
+    }
+
+    #[test]
+    fn other_errors_keep_the_handle() {
+        let s = start_sim();
+        loaded(&s.rx);
+        s.tx.send(Command::ApplyProfile("missing".into())).unwrap();
+        wait_for(&s.rx, |e| matches!(e, Event::Error(_)).then_some(()));
+        s.tx.send(Command::Quit).unwrap();
+        s.h.join().unwrap();
+        while let Ok(e) = s.rx.try_recv() {
+            assert!(!matches!(e, Event::State(st) if !st.connected), "not disconnected");
+        }
+    }
+
+    #[test]
+    fn poll_rate_change_reconnects_and_keeps_the_node() {
+        let s = start_sim();
+        let st = loaded(&s.rx);
+        let mut snap = st.snapshot.unwrap();
+        snap.poll_rate_khz = Some(if snap.poll_rate_khz == Some(8) { 1 } else { 8 });
+        s.tx.send(Command::Apply(snap.to_json().unwrap())).unwrap();
+        wait_for(&s.rx, |e| matches!(e, Event::Notice("notice.reconnected", _)).then_some(()));
+        let after = loaded(&s.rx);
+        assert!(after.connected);
+        assert_eq!(after.node, "simulator");
+        assert_eq!(after.snapshot.unwrap().poll_rate_khz, snap.poll_rate_khz);
+        s.tx.send(Command::Quit).unwrap();
+        s.h.join().unwrap();
+    }
+
+    #[test]
+    fn node_labels() {
+        assert_eq!(node_label(None), "simulator");
+        assert_eq!(node_label(Some(Path::new("/dev/hidraw7"))), "/dev/hidraw7");
     }
 
     /// Waits for the first event `f` accepts.

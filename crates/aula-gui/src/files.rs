@@ -175,6 +175,9 @@ mod tests {
         assert_ne!(d.backups, d.profiles);
         assert_eq!(std::fs::metadata(&base).unwrap().permissions().mode() & 0o777, 0o700);
         assert_eq!(Dirs::for_run(true).unwrap(), d, "created once per process");
+        // the only test using the process-wide directory
+        remove_sim_dir();
+        assert!(!base.exists());
     }
 
     #[test]

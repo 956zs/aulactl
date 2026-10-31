@@ -389,7 +389,7 @@ impl cxx_qt::Initialize for qobject::Device {
         let (tx, rx) = mpsc::channel();
         let qt = self.qt_thread();
         let cfg = config::get();
-        let settings = Settings { sim: self.sim, poll: cfg.device_poll, live_publish: cfg.live_publish };
+        let settings = Settings { sim: self.sim, poll: cfg.device_poll, live_publish: cfg.live_publish, dirs: None, sim_board: None };
         let spawned = worker::spawn(tx.clone(), move || {
             worker::run(rx, settings, |event| qt.queue(move |device| apply(device, event)).is_ok());
         });
