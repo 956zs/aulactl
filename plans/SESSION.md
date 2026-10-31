@@ -70,3 +70,29 @@ Invalid, Refused, Verify), `Result<T>`; `impl From<Error> for String`. Units: tr
   by_index, by_code, all_indices, select("wasd,row:2,Esc,idx:46,all,letters,digits,mods")}`; `perkey::{PerKey, key_name}`.
 - Tests without hardware: feature `sim` -> `sim::SimKeyboard` (owner's board in memory) + `Keyboard::with_link(sim)`;
   real snapshot fixture `crates/aula-core/tests/fixtures/owner-2026-11-01.json`.
+
+## CLI (crates/aulactl) ✅
+
+Commits 7c7b972, 2edf358. 54 tests (pure helpers + end-to-end against `sim`), clippy -D warnings clean.
+Real board: only read commands and `travel` were run (no write sent).
+- device: `list`, `info`, `dump [FILE]`, `backup [FILE]`, `diff FILE`, `restore FILE [--yes]`,
+  `profile list|save NAME [--force]|show|diff|apply NAME [--yes]|delete NAME --yes`
+- actuation: `actuation show [KEYS] [--table]`, `actuation set KEYS [--point MM] [--rt P[/R]] [--mode fixed|rt|rt-split]`,
+  `deadband show|set KEYS --top/--bottom MM`, `switch show|list|set KEYS TYPE`, `pollrate [1|2|4|8]` (waits for restart,
+  reads back), `travel [KEYS] [--raw] [--seconds N]` (SIGINT/SIGTERM close the stream), `calibrate --yes`,
+  `reset triggers|factory --yes`
+- keys: `keymap show [--layer] [--all]|set KEYS ACTION|reset KEYS|codes [FILTER]`, `macro list|show|set SLOT "STEPS"
+  [--mode] [--repeat] [--delay] [--bind KEYS]|clear`, `adv list|set SLOT dks|mt|tgl ..|clear`, `socd [list]|add|remove|on|off`,
+  `winlock [opts]`
+- light: `light [show]|modes|effect MODE [opts]|brightness|speed|direction|rainbow|color|on|off|custom [show] [SLOT]|
+  custom set KEYS #rgb [--slot]|slot [N]|music on|off`
+
+## GUI (crates/aula-gui, phase B) ✅
+- cxx-qt 0.10 + QML, hecatectl look (ii matugen theme, en + zh_TW with live switch). Pages: Overview (status, capabilities,
+  profiles with diff preview, backup/restore, poll rate, win-lock, language, factory reset), Actuation, Keymap, Macros,
+  Advanced (DKS/MT/TGL + SOCD), Lighting (effects, per-key paint, music rhythm), Live (heatmap, key tester, calibration).
+- Write path: pages edit snapshot sections; worker re-reads, refuses if the board changed since it was shown, then
+  `apply_snapshot` (changed tables only) and re-reads. Destructive actions only from confirm dialogs.
+- `--sim` / `AULA_GUI_SIM=1` = core simulator (scratch profile/backup dirs). `--page N`, `--screenshot PATH`.
+- 93 tests, clippy clean. Installed with scripts/install.sh (~/.local/bin/aula-gui + desktop entry). Real board: only
+  read pages and a short live stream were used (open/close ACKed); no write was sent.
