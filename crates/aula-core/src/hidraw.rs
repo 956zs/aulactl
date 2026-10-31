@@ -128,6 +128,10 @@ pub trait Link {
     fn unlock(&mut self) {}
 }
 
+/// `drain` stops after this many stale frames or this long, whichever comes first.
+const DRAIN_MAX_FRAMES: usize = 256;
+const DRAIN_MAX_TIME: Duration = Duration::from_millis(100);
+
 /// How long an operation waits for another process's operation to finish.
 const LOCK_WAIT: Duration = Duration::from_secs(10);
 const LOCK_POLL: Duration = Duration::from_millis(20);
@@ -252,7 +256,11 @@ impl Link for Device {
 
     fn drain(&mut self) -> Result<()> {
         let mut buf = [0u8; 64];
-        loop {
+        let deadline = Instant::now() + DRAIN_MAX_TIME;
+        for _ in 0..DRAIN_MAX_FRAMES {
+            if Instant::now() >= deadline {
+                break;
+            }
             match self.file.read(&mut buf) {
                 Ok(_) => {
                     if self.debug {
@@ -263,6 +271,9 @@ impl Link for Device {
                 Err(e) => return Err(Error::Io(format!("read: {e}"))),
             }
         }
+        // A board that keeps sending (a travel stream left open) cannot hold the caller up: replies are
+        // matched by command anyway.
+        Ok(())
     }
 
     fn lock(&mut self) -> Result<()> {
@@ -354,5 +365,17 @@ mod tests {
     #[test]
     fn open_missing_node_fails() {
         assert!(matches!(Device::open(Path::new("/nonexistent/hidraw99")), Err(Error::Io(_))));
+    }
+
+    #[test]
+    fn drain_is_bounded() {
+        // a regular file never reports WouldBlock: an unbounded drain would spin forever
+        let path = temp_file("drain");
+        fs::write(&path, vec![0u8; 64 * 1024]).unwrap();
+        let mut d = Device::open(&path).unwrap();
+        let t = Instant::now();
+        d.drain().unwrap();
+        assert!(t.elapsed() < Duration::from_secs(1));
+        fs::remove_file(&path).unwrap();
     }
 }

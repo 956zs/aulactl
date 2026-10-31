@@ -2,7 +2,9 @@
 
 use crate::error::{invalid, Error, Result};
 use crate::snapshot::Snapshot;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::{ErrorKind, Read, Write};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 /// Automatic backups kept (oldest deleted first).
@@ -10,6 +12,11 @@ pub const KEEP_AUTO_BACKUPS: usize = 20;
 const AUTO_PREFIX: &str = "auto-";
 const JSON_EXT: &str = ".json";
 const MAX_PROFILE_NAME: usize = 32;
+/// Largest snapshot file `load_snapshot` reads (a real one is about 60 KiB).
+pub const MAX_SNAPSHOT_BYTES: u64 = 4 * 1024 * 1024;
+/// Backups and profiles hold the whole keyboard configuration: owner-only.
+const DIR_MODE: u32 = 0o700;
+const FILE_MODE: u32 = 0o600;
 
 /// `$XDG_DATA_HOME/aulactl`, or `~/.local/share/aulactl`. Relative XDG paths are ignored (XDG spec).
 pub fn data_dir() -> Result<PathBuf> {
@@ -34,25 +41,88 @@ pub fn profiles_dir() -> Result<PathBuf> {
     Ok(data_dir()?.join("profiles"))
 }
 
-/// Writes `text` to `path` through a temporary file and a rename, so a crash never leaves half a file.
-pub fn write_atomic(path: &Path, text: &str) -> Result<()> {
+fn io_err(path: &Path, e: std::io::Error) -> Error {
+    Error::Io(format!("{}: {e}", path.display()))
+}
+
+/// Creates `dir` (and missing parents) owner-only (0700); an existing `dir` is narrowed to 0700. For aulactl's
+/// own directories (backups, profiles), not for directories the user names.
+pub fn private_dir(dir: &Path) -> Result<()> {
+    fs::DirBuilder::new().recursive(true).mode(DIR_MODE).create(dir).map_err(|e| io_err(dir, e))?;
+    let meta = fs::metadata(dir).map_err(|e| io_err(dir, e))?;
+    if meta.permissions().mode() & 0o777 != DIR_MODE {
+        fs::set_permissions(dir, fs::Permissions::from_mode(DIR_MODE)).map_err(|e| io_err(dir, e))?;
+    }
+    Ok(())
+}
+
+/// Writes `text` to a new owner-only (0600) temporary file next to `path` and returns its name.
+fn write_temp(path: &Path, text: &str) -> Result<PathBuf> {
     let dir = path.parent().ok_or_else(|| Error::Io(format!("{}: no parent directory", path.display())))?;
-    fs::create_dir_all(dir).map_err(|e| Error::Io(format!("{}: {e}", dir.display())))?;
+    let dir = if dir.as_os_str().is_empty() { Path::new(".") } else { dir };
+    fs::DirBuilder::new().recursive(true).mode(DIR_MODE).create(dir).map_err(|e| io_err(dir, e))?;
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let tmp = dir.join(format!(".{name}.tmp-{}", std::process::id()));
-    fs::write(&tmp, text).map_err(|e| Error::Io(format!("{}: {e}", tmp.display())))?;
+    let open = || OpenOptions::new().write(true).create_new(true).mode(FILE_MODE).open(&tmp);
+    let mut f = match open() {
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+            // left over by a crashed process with the same pid
+            fs::remove_file(&tmp).map_err(|e| io_err(&tmp, e))?;
+            open()
+        }
+        r => r,
+    }
+    .map_err(|e| io_err(&tmp, e))?;
+    if let Err(e) = f.write_all(text.as_bytes()).and_then(|_| f.sync_all()) {
+        let _ = fs::remove_file(&tmp);
+        return Err(io_err(&tmp, e));
+    }
+    Ok(tmp)
+}
+
+/// Writes `text` to `path` through a temporary file and a rename, so a crash never leaves half a file.
+/// Replaces an existing `path`. The file is owner-only (0600).
+pub fn write_atomic(path: &Path, text: &str) -> Result<()> {
+    let tmp = write_temp(path, text)?;
     fs::rename(&tmp, path).map_err(|e| {
         let _ = fs::remove_file(&tmp);
-        Error::Io(format!("{}: {e}", path.display()))
+        io_err(path, e)
     })
 }
 
+/// Like `write_atomic`, but fails when `path` exists, also when it appears meanwhile (the temporary file is
+/// hard-linked into place, which never replaces anything).
+pub fn write_new(path: &Path, text: &str) -> Result<()> {
+    let tmp = write_temp(path, text)?;
+    let r = fs::hard_link(&tmp, path);
+    let _ = fs::remove_file(&tmp);
+    match r {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+            invalid(format!("{} already exists; pick a new file name", path.display()))
+        }
+        Err(e) => Err(io_err(path, e)),
+    }
+}
+
+/// Saves a snapshot, replacing `path` if it exists.
 pub fn save_snapshot(path: &Path, snap: &Snapshot) -> Result<()> {
     write_atomic(path, &(snap.to_json()? + "\n"))
 }
 
+/// Saves a snapshot to a new file; fails when `path` exists.
+pub fn save_snapshot_new(path: &Path, snap: &Snapshot) -> Result<()> {
+    write_new(path, &(snap.to_json()? + "\n"))
+}
+
+/// Reads and checks a snapshot file (at most `MAX_SNAPSHOT_BYTES`).
 pub fn load_snapshot(path: &Path) -> Result<Snapshot> {
-    let text = fs::read_to_string(path).map_err(|e| Error::Io(format!("{}: {e}", path.display())))?;
+    let f = fs::File::open(path).map_err(|e| io_err(path, e))?;
+    let mut text = String::new();
+    f.take(MAX_SNAPSHOT_BYTES + 1).read_to_string(&mut text).map_err(|e| io_err(path, e))?;
+    if text.len() as u64 > MAX_SNAPSHOT_BYTES {
+        return invalid(format!("{}: larger than {} MiB, not a snapshot", path.display(), MAX_SNAPSHOT_BYTES >> 20));
+    }
     Snapshot::from_json(&text).map_err(|e| Error::Invalid(format!("{}: {e}", path.display())))
 }
 
@@ -75,6 +145,7 @@ pub fn timestamp(unix: u64) -> String {
 
 /// Saves `snap` as `<dir>/auto-<timestamp>.json` and deletes the oldest automatic backups beyond 20.
 pub fn save_auto_backup(dir: &Path, snap: &Snapshot) -> Result<PathBuf> {
+    private_dir(dir)?;
     let stamp = timestamp(snap.created_unix);
     let mut path = dir.join(format!("{AUTO_PREFIX}{stamp}{JSON_EXT}"));
     let mut n = 1;
@@ -82,7 +153,7 @@ pub fn save_auto_backup(dir: &Path, snap: &Snapshot) -> Result<PathBuf> {
         path = dir.join(format!("{AUTO_PREFIX}{stamp}-{n}{JSON_EXT}"));
         n += 1;
     }
-    save_snapshot(&path, snap)?;
+    save_snapshot_new(&path, snap)?;
     prune_auto_backups(dir, KEEP_AUTO_BACKUPS)?;
     Ok(path)
 }
@@ -172,10 +243,15 @@ impl Profiles {
     /// Saves a profile. Refuses to replace an existing one unless `overwrite`.
     pub fn save(&self, name: &str, snap: &Snapshot, overwrite: bool) -> Result<PathBuf> {
         let path = self.path(name)?;
-        if path.exists() && !overwrite {
-            return invalid(format!("profile {name:?} exists (overwrite it explicitly)"));
+        private_dir(&self.dir)?;
+        if overwrite {
+            save_snapshot(&path, snap)?;
+        } else {
+            save_snapshot_new(&path, snap).map_err(|e| match e {
+                Error::Invalid(_) if path.exists() => Error::Invalid(format!("profile {name:?} exists (overwrite it explicitly)")),
+                e => e,
+            })?;
         }
-        save_snapshot(&path, snap)?;
         Ok(path)
     }
 
@@ -268,6 +344,51 @@ mod tests {
         assert!(p.load("ok").is_err(), "not a snapshot");
         p.delete("ok").unwrap();
         assert!(p.delete("ok").is_err());
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn write_new_never_replaces() {
+        let d = temp_dir("new");
+        let p = d.join("a.json");
+        write_new(&p, "one").unwrap();
+        assert!(write_new(&p, "two").unwrap_err().to_string().contains("already exists"));
+        assert_eq!(fs::read_to_string(&p).unwrap(), "one");
+        write_atomic(&p, "three").unwrap();
+        assert_eq!(fs::read_to_string(&p).unwrap(), "three");
+        // no temporary files left behind
+        assert_eq!(fs::read_dir(&d).unwrap().count(), 1);
+        // a missing parent is created owner-only
+        write_new(&d.join("sub/b.json"), "x").unwrap();
+        assert_eq!(fs::metadata(d.join("sub")).unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(fs::metadata(d.join("sub/b.json")).unwrap().permissions().mode() & 0o777, 0o600);
+        assert!(write_new(Path::new("/"), "x").is_err());
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn load_snapshot_size_cap() {
+        let d = temp_dir("big");
+        let big = d.join("big.json");
+        let f = fs::File::create(&big).unwrap();
+        f.set_len(MAX_SNAPSHOT_BYTES + 1).unwrap();
+        assert!(load_snapshot(&big).unwrap_err().to_string().contains("larger than 4 MiB"));
+        fs::write(&big, "{}").unwrap();
+        assert!(matches!(load_snapshot(&big), Err(Error::Invalid(_))), "small but not a snapshot");
+        assert!(matches!(load_snapshot(&d.join("missing.json")), Err(Error::Io(_))));
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn private_dir_narrows_existing() {
+        let d = temp_dir("narrow");
+        fs::set_permissions(&d, fs::Permissions::from_mode(0o755)).unwrap();
+        private_dir(&d).unwrap();
+        assert_eq!(fs::metadata(&d).unwrap().permissions().mode() & 0o777, 0o700);
+        private_dir(&d.join("a/b")).unwrap();
+        assert_eq!(fs::metadata(d.join("a")).unwrap().permissions().mode() & 0o777, 0o700);
+        fs::write(d.join("file"), "").unwrap();
+        assert!(private_dir(&d.join("file")).is_err());
         fs::remove_dir_all(&d).unwrap();
     }
 }
