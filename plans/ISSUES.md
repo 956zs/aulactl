@@ -37,3 +37,13 @@ Tests after the fixes: aula-core 142, aulactl 57, aula-gui 96; clippy -D warning
 | — | GUI worker tests left `$XDG_RUNTIME_DIR/aula-gui-sim-<pid>` | fixed: per-test scratch dirs removed on drop; sim-dir test removes the process dir | 9b8a7cd |
 
 Tests after the fixes: aula-core 150, aulactl 60, aula-gui 101; clippy -D warnings clean; reinstalled; real board READ-only smoke (info, dump, diff vs pre-write backup) OK.
+
+## Hardware-test findings 2026-11-01
+
+| id | finding | status | commit |
+|---|---|---|---|
+| HW-1 | single macro-slot writes (5 pages, all ACKed `19 00`) are silently dropped by the firmware; a full 0..9 sequence is stored | fixed: `write_macro` / new `write_macros` read all slots and write all 10 in order 0..9 (unchanged slots with their current image), then read all back; snapshot apply has one "macros" table; encoder writes delay 0 for the last event (CLI text: no trailing wait); sim only commits a full 0..9 sequence | c3d7f60, 704b781 |
+| HW-2 | SOCD power `24 03` takes effect but gets no ACK (protocol said `24 00`) | fixed: `set_socd_enabled` / factory reset send it without waiting, verify via `24 02` (up to 5 reads, 20 ms apart); sim sends no ACK | c3d7f60, 704b781 |
+| HW-3 | writing a custom RGB slot switches the effect to Custom (mode 10, brightness 4, speed 3) | fixed: `write_custom_colors*` put the previous effect back (`07 00`, verified by `07 01`); snapshot apply writes custom slots before the effect; sim switches the effect | c3d7f60, 704b781 |
+
+Real board after the fixes: macro set/clear on slots 9 and 3 (6 runs, all stored, other slot kept), SOCD on/off, `light custom set Esc '#00ff00' --slot 1` and back (effect stayed static); restore of the pre-write backup: nothing to change, `diff` matches.

@@ -105,5 +105,9 @@ Real board: only read commands and `travel` were run (no write sent).
 ## Review fixes ✅
 - Correctness review P2-1..P3-6 + test dir cleanup fixed (ca80ddb core, cc1ab90 cli, db699cd sim knob, 9b8a7cd gui); see plans/ISSUES.md. Tests 150/60/101, clippy clean, reinstalled; real board READ-only smoke OK.
 - ✅ Phase C: security review (fixed, ISSUES.md), correctness review (fixed), Codex skipped by owner; README/LICENSE; pushed private 956zs/aulactl (2026-11-01)
-- Real-device writes verified so far: actuation (one key change+revert), lighting brightness. Not yet on hardware: keymap/macro/SOCD/adv/custom RGB writes, calibration, resets (JS-only), GUI Apply.
+- ✅ Hardware-test fixes (c3d7f60, 704b781; ISSUES HW-1..3): macros always written as a whole 0..9 sequence (`write_macros`), last
+  macro delay 0; SOCD power unacked, verified via `24 02`; custom RGB writes put the previous effect back, apply writes custom
+  slots before the effect. Tests 158/60/101, clippy clean, reinstalled. Real board: macro set/clear (slots 9, 3), SOCD on/off,
+  custom Esc colour and back OK; restore of the pre-write backup = nothing to change, diff matches.
+- Real-device writes verified so far: actuation (one key change+revert), lighting brightness, macros, SOCD power, custom RGB. Not yet on hardware: keymap/SOCD pairs/adv writes, calibration, resets (JS-only), GUI Apply.
 - Owner baseline backup: ~/aula-re/backup-pre-write-2026-11-01.json
