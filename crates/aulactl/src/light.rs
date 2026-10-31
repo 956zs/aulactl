@@ -341,20 +341,25 @@ pub fn light<L: Link>(c: &mut Cli<L>, rest: &[&str]) -> Result<(), String> {
         ["custom", "set", sel, colour] => {
             let colour: Rgb = colour.parse()?;
             let keys = select(Some(sel))?;
-            let s = match slot {
-                Some(s) => s,
-                None => c.kb.read_active_custom_slot()?,
-            };
+            let active = c.kb.read_active_custom_slot()?;
+            let s = slot.unwrap_or(active);
             let mut colors = c.kb.read_custom_colors(s)?;
             for idx in &keys {
                 colors.0.insert(*idx as u8, colour);
             }
-            c.kb.write_custom_colors(s, &colors)?;
+            // the board shows the slot written last: the active slot is rewritten after another one
+            c.kb.write_custom_colors_keep_active(s, &colors)?;
             c.report_backup()?;
             say(
                 c.out,
                 &format!("custom slot {s}: {colour} on {}", key_list(&keys)),
             )?;
+            if s != active {
+                say(
+                    c.out,
+                    &format!("custom slot {active} is still shown; show this one with: aulactl light slot {s}"),
+                )?;
+            }
             let e = c.kb.read_effect()?;
             if e.mode != MODE_CUSTOM {
                 say(

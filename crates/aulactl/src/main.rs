@@ -209,7 +209,7 @@ fn run(mut args: Vec<String>) -> Result<(), String> {
         Outcome::Done => Ok(()),
         Outcome::Restarting(khz) => {
             drop(kb);
-            reconnect(&mut stdout, khz)
+            reconnect(&mut stdout, &info, khz)
         }
     }
 }
@@ -275,14 +275,27 @@ pub fn bad_args(args: &[&str]) -> String {
     )
 }
 
-/// After a poll-rate change: wait for the keyboard to leave and come back, then read the rate back.
-fn reconnect(out: &mut dyn Write, khz: Option<u8>) -> Result<(), String> {
+/// After a poll-rate change: wait for the keyboard that was open (`was`) to leave and come back, then read
+/// the rate back.
+fn reconnect(out: &mut dyn Write, was: &DeviceInfo, khz: Option<u8>) -> Result<(), String> {
     say(out, "waiting for the keyboard to restart...")?;
     let gone_by = Instant::now() + Duration::from_secs(3);
-    while !hidraw::find_devices().is_empty() && Instant::now() < gone_by {
+    while same_board(hidraw::find_devices(), was).is_some() && Instant::now() < gone_by {
         std::thread::sleep(Duration::from_millis(100));
     }
-    let info = hidraw::wait_for_device(Duration::from_secs(15))?;
+    let back_by = Instant::now() + Duration::from_secs(15);
+    let info = loop {
+        if let Some(d) = same_board(hidraw::find_devices(), was) {
+            break d;
+        }
+        if Instant::now() >= back_by {
+            return Err(format!(
+                "the keyboard at {} did not come back within 15 s",
+                was.node.display()
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    };
     // udev may need a moment to grant access to the new node
     let mut tries = 0;
     let mut kb = loop {
@@ -327,6 +340,18 @@ fn take_device_arg(args: &mut Vec<String>) -> Result<Option<PathBuf>, String> {
 /// `--device` resolved through symlinks (such as a udev alias) to the /dev/hidrawN that find_devices reports.
 fn wanted_node(device: Option<PathBuf>) -> Option<PathBuf> {
     device.map(|p| std::fs::canonicalize(&p).unwrap_or(p))
+}
+
+/// The interface of the board that was open, after it re-enumerated: same USB port path (`HID_PHYS`, which
+/// survives a new hidrawN number), or the same node when the kernel reports no port path.
+fn same_board(devs: Vec<DeviceInfo>, was: &DeviceInfo) -> Option<DeviceInfo> {
+    devs.into_iter().find(|d| {
+        if was.phys.is_empty() {
+            d.node == was.node
+        } else {
+            d.phys == was.phys
+        }
+    })
 }
 
 /// The interface to use: the one named by `--device`, which must be a detected vendor interface, or the
@@ -381,6 +406,27 @@ mod main_tests {
             name: name.into(),
             phys: String::new(),
         }
+    }
+
+    #[test]
+    fn reconnect_follows_the_open_board() {
+        let at = |node: &str, phys: &str| DeviceInfo {
+            phys: phys.into(),
+            ..dev(node, "WIN 60 HE")
+        };
+        let was = at("/dev/hidraw7", "usb-0000:00:14.0-2/input2");
+        // renumbered, and another board listed first
+        let devs = vec![
+            at("/dev/hidraw3", "usb-0000:00:14.0-1/input2"),
+            at("/dev/hidraw8", "usb-0000:00:14.0-2/input2"),
+        ];
+        assert_eq!(same_board(devs.clone(), &was).unwrap().node, PathBuf::from("/dev/hidraw8"));
+        assert!(same_board(devs[..1].to_vec(), &was).is_none(), "only the other board: still gone");
+        assert!(same_board(vec![], &was).is_none());
+        // no port path: same node only
+        let bare = dev("/dev/hidraw7", "WIN 60 HE");
+        assert!(same_board(vec![dev("/dev/hidraw3", "WIN 60 HE")], &bare).is_none());
+        assert!(same_board(vec![dev("/dev/hidraw7", "WIN 60 HE")], &bare).is_some());
     }
 
     #[test]

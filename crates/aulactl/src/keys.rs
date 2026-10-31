@@ -11,7 +11,7 @@ use crate::{bad_args, say, Cli};
 use aula_core::advanced::{self, AdvancedKey, SLOTS as ADV_SLOTS};
 use aula_core::hidraw::Link;
 use aula_core::keycodes::{Usage, MEDIA, USAGES};
-use aula_core::keymap::{KeyAction, Keymap, Layer, NAMED};
+use aula_core::keymap::{self, KeyAction, Keymap, Layer, NAMED};
 use aula_core::layout;
 use aula_core::macros::{Macro, PlayMode, SLOTS as MACRO_SLOTS};
 use aula_core::perkey::key_name;
@@ -125,11 +125,37 @@ fn set_keys<L: Link>(
     keys: &[usize],
     action: impl Fn(usize) -> KeyAction,
 ) -> Result<(), String> {
+    let plan = plan_keys(c, layer, keys, action)?;
+    write_planned(c, plan)
+}
+
+/// A layer with `keys` set, checked the way `write_keymap` checks it (Fn-fixed keys, encoding) but not written.
+struct KeymapPlan {
+    layer: Layer,
+    before: Keymap,
+    map: Keymap,
+}
+
+fn plan_keys<L: Link>(
+    c: &mut Cli<L>,
+    layer: Layer,
+    keys: &[usize],
+    action: impl Fn(usize) -> KeyAction,
+) -> Result<KeymapPlan, String> {
     let mut map = c.kb.read_keymap(layer)?;
     let before = map.clone();
     for &idx in keys {
         map.0.insert(idx as u8, action(idx));
     }
+    if layer == Layer::Fn {
+        keymap::check_fn_fixed(&map, &c.kb.read_fn_fixed()?)?;
+    }
+    keymap::encode_layer(layer, &map)?;
+    Ok(KeymapPlan { layer, before, map })
+}
+
+fn write_planned<L: Link>(c: &mut Cli<L>, plan: KeymapPlan) -> Result<(), String> {
+    let KeymapPlan { layer, before, map } = plan;
     if map == before {
         return say(c.out, "nothing to change: the keys already do that");
     }
@@ -297,11 +323,15 @@ pub fn macros<L: Link>(c: &mut Cli<L>, rest: &[&str]) -> Result<(), String> {
                 events,
             };
             m.validate()?;
+            // check the binding before the slot is written, so a bad --bind changes nothing
+            let plan = bind_keys
+                .map(|keys| plan_keys(c, layer, &keys, |_| KeyAction::Macro(s)))
+                .transpose()?;
             c.kb.write_macro(s, Some(&m))?;
             c.report_backup()?;
             say(c.out, &format!("macro slot {s}: {}", macro_line(&m)))?;
-            match bind_keys {
-                Some(keys) => set_keys(c, layer, &keys, |_| KeyAction::Macro(s)),
+            match plan {
+                Some(plan) => write_planned(c, plan),
                 None => say(
                     c.out,
                     &format!("bind it to a key with: aulactl keymap set KEY Macro{s}"),
@@ -421,14 +451,17 @@ pub fn advanced<L: Link>(c: &mut Cli<L>, rest: &[&str]) -> Result<(), String> {
             };
             let bind_keys = bind.map(|b| select(Some(b))).transpose()?;
             advanced::encode(&key)?;
+            let plan = bind_keys
+                .map(|keys| plan_keys(c, layer, &keys, |_| KeyAction::Advanced(s)))
+                .transpose()?;
             c.kb.write_advanced(&[(s, key.clone())])?;
             c.report_backup()?;
             say(
                 c.out,
                 &format!("advanced-key slot {s}: {}", advanced_text(&key)),
             )?;
-            match bind_keys {
-                Some(keys) => set_keys(c, layer, &keys, |_| KeyAction::Advanced(s)),
+            match plan {
+                Some(plan) => write_planned(c, plan),
                 None => say(
                     c.out,
                     &format!("bind it to a key with: aulactl keymap set KEY Adv{s}"),

@@ -490,6 +490,8 @@ pub fn calibrate<L: Link>(c: &mut Cli<L>, rest: &[&str]) -> Result<(), String> {
         "calibrating: press every key fully down and release it; Enter or Ctrl-C finishes",
     )?;
     let mut done: Vec<usize> = Vec::new();
+    // a final status the board sent on its own; it wins over what stop() gets afterwards
+    let mut early: Option<CalibrationEvent> = None;
     loop {
         if signal::interrupted() || enter.load(Ordering::SeqCst) || done.len() == total {
             break;
@@ -502,16 +504,18 @@ pub fn calibrate<L: Link>(c: &mut Cli<L>, rest: &[&str]) -> Result<(), String> {
                 }
                 done = keys;
             }
-            Some(CalibrationEvent::Finished) => break,
-            Some(CalibrationEvent::Failed(code)) => {
-                return Err(format!(
-                    "the keyboard reports calibration failure (code {code})"
-                ))
+            Some(e @ (CalibrationEvent::Finished | CalibrationEvent::Failed(_))) => {
+                early = Some(e);
+                break;
             }
             None => {}
         }
     }
-    let result = cal.stop()?;
+    let stopped = cal.stop();
+    let result = match early {
+        Some(e) => Some(e),
+        None => stopped?,
+    };
     let missing: Vec<usize> = layout::all_indices()
         .into_iter()
         .filter(|k| !done.contains(k))

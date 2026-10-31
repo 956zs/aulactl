@@ -538,6 +538,7 @@ fn lighting() {
     .unwrap();
     assert!(
         out.starts_with("custom slot 1: #00ff00 on KeyW KeyA KeyS KeyD\n")
+            && out.contains("custom slot 0 is still shown")
             && out.contains("light effect custom"),
         "{out}"
     );
@@ -545,7 +546,22 @@ fn lighting() {
         k.read_custom_colors(1).unwrap().get(46),
         Some(&Rgb(0, 255, 0))
     );
-    assert_eq!(run(&mut k, &["light", "slot"]).unwrap(), "custom slot 1\n");
+    assert_eq!(
+        run(&mut k, &["light", "slot"]).unwrap(),
+        "custom slot 0\n",
+        "editing the other slot does not switch the shown one"
+    );
+    assert_eq!(
+        k.read_custom_colors(0).unwrap().get(46),
+        Some(&Rgb(0xff, 0, 0))
+    );
+    assert_eq!(
+        run(&mut k, &["light", "slot", "1"]).unwrap(),
+        "custom slot 1 selected\n"
+    );
+    let out = run(&mut k, &["light", "custom", "set", "W", "#0000ff"]).unwrap();
+    assert!(!out.contains("still shown"), "{out}");
+    assert_eq!(k.read_active_custom_slot().unwrap(), 1);
     assert_eq!(
         run(&mut k, &["light", "slot", "0"]).unwrap(),
         "custom slot 0 selected\n"
@@ -683,6 +699,80 @@ fn destructive_commands_need_yes() {
         k.read_keymap(Layer::Base).unwrap().get(66),
         Some(&KeyAction::Key(0x39))
     );
+}
+
+/// Sim link that answers the calibration start with `event`, and drops every other `0x21` reply (so stop()
+/// gets no final status).
+struct EarlyStatus {
+    sim: SimKeyboard,
+    event: aula_core::frame::Body,
+}
+
+impl aula_core::hidraw::Link for EarlyStatus {
+    fn send(&mut self, b: &aula_core::frame::Body) -> aula_core::Result<()> {
+        self.sim.send(b)?;
+        if b[0] == 0x21 && b[4] == 0x18 && b[5] == 0x0f {
+            self.sim.push_input(self.event);
+        }
+        Ok(())
+    }
+    fn recv(&mut self, t: std::time::Duration) -> aula_core::Result<Option<aula_core::frame::Body>> {
+        self.sim.recv(t)
+    }
+    fn drain(&mut self) -> aula_core::Result<()> {
+        self.sim.drain()
+    }
+}
+
+fn hex_body(s: &str) -> aula_core::frame::Body {
+    let mut b = [0u8; aula_core::frame::BODY_LEN];
+    for (i, h) in s.split_whitespace().enumerate() {
+        b[i] = u8::from_str_radix(h, 16).unwrap();
+    }
+    b
+}
+
+fn calibrate_with_early(event: &str) -> Result<String, String> {
+    let mut sim = SimKeyboard::owner_board();
+    sim.mute_cmd = Some(0x21);
+    let mut k = Keyboard::with_link(EarlyStatus {
+        sim,
+        event: hex_body(event),
+    })
+    .unwrap();
+    k.set_auto_backup(None);
+    let mut out = Vec::new();
+    let mut c = Cli::new(&mut k, &mut out);
+    dispatch(&mut c, &["calibrate", "--yes"])?;
+    assert!(!k.link().sim.calibrating, "stop was sent");
+    Ok(String::from_utf8(out).unwrap())
+}
+
+#[test]
+fn calibration_keeps_an_early_final_status() {
+    let out = calibrate_with_early("21 00 00 00 02 0f 00").unwrap();
+    assert!(out.ends_with("calibration finished\n"), "{out}");
+    let e = calibrate_with_early("21 00 00 00 02 0f 04").unwrap_err();
+    assert!(e.contains("failure (code 4)"), "{e}");
+}
+
+#[test]
+fn bind_targets_are_checked_before_the_slot_is_written() {
+    let mut k = kb();
+    let start = k.link().sent.len();
+    // KeyW is Fn-fixed
+    assert!(run(&mut k, &["macro", "set", "3", "tap a", "--bind", "W", "--layer", "fn"]).is_err());
+    assert!(run(
+        &mut k,
+        &["adv", "set", "4", "tgl", "ShiftLeft", "--bind", "W", "--layer", "fn"]
+    )
+    .is_err());
+    assert_eq!(writes_since(&k, start), 0, "nothing written");
+    assert_eq!(k.read_macro(3).unwrap(), None);
+    assert_eq!(k.read_advanced().unwrap()[4], AdvancedKey::Empty);
+    // a valid fn-layer bind still works
+    let out = run(&mut k, &["macro", "set", "3", "tap a", "--bind", "E", "--layer", "fn"]).unwrap();
+    assert!(out.ends_with("fn layer KeyE: Macro3\n"), "{out}");
 }
 
 #[test]
