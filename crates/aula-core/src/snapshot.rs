@@ -129,7 +129,8 @@ fn now_unix() -> u64 {
 /// Reads every table (in the official driver's connect order) under one device lock.
 pub(crate) fn read<L: Link>(kb: &mut Keyboard<L>) -> Result<Snapshot> {
     kb.with_lock(|kb| {
-        let caps = *kb.capabilities()?;
+        // re-read: the win-lock bits change on the board (Fn combos) and with every write
+        let caps = kb.refresh_capabilities()?;
         let travel = kb.travel_limits()?;
         let macros = kb.read_macros()?;
         let advanced = kb.read_advanced()?;
@@ -182,12 +183,16 @@ pub fn changed_tables(new: &Snapshot, old: &Snapshot) -> Vec<String> {
         v.push("lighting effect".to_string());
     }
     if let (Some(n), Some(o)) = (&new.lighting.custom, &old.lighting.custom) {
-        for s in 0..2 {
-            let reselect = s as u8 == new.lighting.active_custom_slot
-                && new.lighting.active_custom_slot != old.lighting.active_custom_slot;
-            if n[s] != o[s] || reselect {
-                v.push(format!("custom colours slot {s}"));
-            }
+        // Custom mode shows the slot written last (protocol 5.5): the other slot first, then the active one,
+        // which is rewritten even when unchanged so writing the other slot does not switch the shown slot.
+        let active = (new.lighting.active_custom_slot & 1) as usize;
+        let other = 1 - active;
+        let write_other = n[other] != o[other];
+        if write_other {
+            v.push(format!("custom colours slot {other}"));
+        }
+        if write_other || n[active] != o[active] || new.lighting.active_custom_slot != old.lighting.active_custom_slot {
+            v.push(format!("custom colours slot {active}"));
         }
     }
     for s in 0..macros::SLOTS as usize {
@@ -234,8 +239,11 @@ pub fn changed_tables(new: &Snapshot, old: &Snapshot) -> Vec<String> {
 /// entries and raw advanced-key slots are only accepted unchanged from `old` (`keymap::RAW_NOT_KEPT`).
 fn validate<L: Link>(kb: &mut Keyboard<L>, new: &Snapshot, old: &Snapshot, tables: &[String]) -> Result<()> {
     let limits = kb.travel_limits()?;
-    for (idx, t) in new.trigger.iter() {
-        t.validate(&limits).map_err(|e| Error::Invalid(format!("trigger {}: {e}", key_name(idx))))?;
+    // only keys apply writes: values already on the board do not block unrelated changes
+    for idx in new.trigger.changed_keys(&old.trigger) {
+        if let Some(t) = new.trigger.get(idx) {
+            t.validate(&limits).map_err(|e| Error::Invalid(format!("trigger {}: {e}", key_name(idx))))?;
+        }
     }
     for (layer, map, was) in [
         (Layer::Base, &new.keymap.base, &old.keymap.base),
@@ -344,6 +352,9 @@ pub(crate) fn apply<L: Link>(kb: &mut Keyboard<L>, new: &Snapshot, old: &Snapsho
                     if let Some(s) = other.strip_prefix("custom colours slot ") {
                         let s: u8 = s.parse().expect("own label");
                         kb.write_custom_colors(s, &new.lighting.custom.as_ref().expect("checked")[s as usize])?;
+                        if s == new.lighting.active_custom_slot {
+                            kb.verify_active_custom_slot(s)?;
+                        }
                     } else if let Some(s) = other.strip_prefix("macro slot ") {
                         let s: u8 = s.parse().expect("own label");
                         kb.write_macro(s, new.macros[s as usize].as_ref())?;

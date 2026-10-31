@@ -582,3 +582,85 @@ fn backups_and_profiles_are_owner_only() {
     assert_eq!(mode(&path), 0o600);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn writing_the_other_custom_slot_keeps_the_shown_slot() {
+    let mut k = kb();
+    let old = k.read_snapshot().unwrap();
+    let mut new = old.clone();
+    new.lighting.custom.as_mut().unwrap()[1].0.insert(22, Rgb(1, 2, 3));
+    assert_eq!(changed_tables(&new, &old), vec!["custom colours slot 1", "custom colours slot 0"], "active slot last");
+    k.apply_snapshot(&new, &old).unwrap();
+    assert_eq!(k.read_active_custom_slot().unwrap(), 0);
+    assert_eq!(k.read_custom_colors(1).unwrap().get(22), Some(&Rgb(1, 2, 3)));
+    assert_eq!(k.read_custom_colors(0).unwrap(), old.lighting.custom.as_ref().unwrap()[0], "slot 0 rewritten unchanged");
+    // switching to slot 1 while changing slot 0: slot 0 first, slot 1 last
+    let old = k.read_snapshot().unwrap();
+    let mut new = old.clone();
+    new.lighting.active_custom_slot = 1;
+    new.lighting.custom.as_mut().unwrap()[0].0.insert(22, Rgb(4, 5, 6));
+    assert_eq!(changed_tables(&new, &old), vec!["custom colours slot 0", "custom colours slot 1"]);
+    k.apply_snapshot(&new, &old).unwrap();
+    assert_eq!(k.read_active_custom_slot().unwrap(), 1);
+    // nothing changed: nothing written
+    let old = k.read_snapshot().unwrap();
+    assert!(changed_tables(&old, &old).is_empty());
+}
+
+#[test]
+fn single_custom_slot_write_keeps_the_active_slot() {
+    let mut k = kb();
+    let shown = k.read_custom_colors(0).unwrap();
+    let mut c = PerKey::new();
+    c.0.insert(46, Rgb(9, 9, 9));
+    k.write_custom_colors_keep_active(1, &c).unwrap();
+    assert_eq!(k.read_active_custom_slot().unwrap(), 0);
+    assert_eq!(k.read_custom_colors(1).unwrap().get(46), Some(&Rgb(9, 9, 9)));
+    assert_eq!(k.read_custom_colors(0).unwrap(), shown);
+    let custom_writes = |k: &Keyboard<SimKeyboard>| writes(k).iter().filter(|b| b[0] == 0x09).count();
+    let before = custom_writes(&k);
+    k.write_custom_colors_keep_active(0, &shown).unwrap();
+    assert_eq!(custom_writes(&k) - before, 8, "active slot: one table, no extra rewrite");
+    assert!(k.write_custom_colors_keep_active(2, &c).is_err());
+    let e = k.verify_active_custom_slot(1).unwrap_err();
+    assert!(matches!(e, Error::Verify(_)), "{e}");
+}
+
+#[test]
+fn out_of_range_triggers_on_the_board_do_not_block_other_keys() {
+    let mut k = kb();
+    k.link_mut().triggers[30].1 = 2000; // beyond the 3.40 mm travel
+    let old = k.read_snapshot().unwrap();
+    let mut new = old.clone();
+    new.trigger.0.get_mut(&46).unwrap().actuation = 150;
+    k.apply_snapshot(&new, &old).unwrap();
+    assert_eq!(k.read_trigger(46).unwrap().actuation, 150);
+    // a changed key is still checked
+    let old = k.read_snapshot().unwrap();
+    let mut bad = old.clone();
+    bad.trigger.0.get_mut(&46).unwrap().actuation = 2000;
+    assert!(matches!(k.apply_snapshot(&bad, &old), Err(Error::Invalid(_))));
+    assert_eq!(k.read_trigger(46).unwrap().actuation, 150);
+}
+
+#[test]
+fn snapshot_reads_the_current_win_lock() {
+    let mut k = kb();
+    let before = k.read_snapshot().unwrap().win_lock;
+    k.link_mut().caps[20] = 0b0100; // changed on the board (Fn combo) after connect
+    let now = k.read_snapshot().unwrap().win_lock;
+    assert_ne!(now, before);
+    assert_eq!(now, WinLock { alt_f4: true, ..Default::default() });
+}
+
+#[test]
+fn calibration_ignores_start_echo_and_acks() {
+    let mut k = kb();
+    let mut c = k.calibrate(Confirm::user_confirmed()).unwrap();
+    c.push(body("21 00 00 00 18 0f 00"));
+    c.push(body("21 00 00 00 01 0f 00"));
+    assert_eq!(c.next_event(Duration::from_millis(1)).unwrap(), None, "echo and ACK are not Finished");
+    c.push(body("21 00 00 00 02 0f 04"));
+    assert_eq!(c.next_event(Duration::from_millis(1)).unwrap(), Some(CalibrationEvent::Failed(4)));
+    assert_eq!(c.stop().unwrap(), Some(CalibrationEvent::Finished));
+}

@@ -6,6 +6,7 @@ use crate::frame::{
     self, encode_mask, Body, CMD_TRIGGER, MASK_LEN, SUB_CALIB_PROGRESS_OLD, SUB_CALIB_START, SUB_CALIB_STOP,
     SUB_TRAVEL_CLOSE, SUB_TRAVEL_OPEN, SUB_TRAVEL_SAMPLE, TRIGGER_B4,
 };
+use std::time::Duration;
 
 /// Proof that the user confirmed a destructive operation (factory reset, trigger reset, calibration).
 /// Construct it only right after an explicit confirmation (CLI `--yes`, GUI dialog).
@@ -58,7 +59,17 @@ pub fn parse_sample(b: &Body) -> Option<TravelSample> {
 
 /// `21 00 00 00 18 0F 00`: start any-key calibration. DESTRUCTIVE (overwrites the calibration data).
 pub fn calibration_start_frame(_: Confirm) -> Body {
+    start_body()
+}
+
+fn start_body() -> Body {
     frame::trigger_request(TRIGGER_B4, SUB_CALIB_START, &[0])
+}
+
+/// The frame is byte for byte the start request. Received within `CALIBRATION_ECHO_WINDOW` of the start it is
+/// treated as an echo/ACK and ignored instead of being read as `Finished`.
+pub fn is_start_echo(b: &Body) -> bool {
+    *b == start_body()
 }
 
 /// `21 00 00 00 18 10 00`: stop any-key calibration.
@@ -89,9 +100,15 @@ pub enum CalibrationEvent {
     Failed(u8),
 }
 
+/// How long after the start frame a frame identical to it is taken for an echo, not a `Finished` (protocol 16).
+pub const CALIBRATION_ECHO_WINDOW: Duration = Duration::from_millis(100);
+
 /// Decodes a calibration notification (`21 .. b[5] = 08 or 0F`, protocol 10.3). None for other frames.
+/// `b[4]` is the length of `b[5..]` in board notifications (`05 01 ..` samples, `02 0f 00` stop status), so
+/// frames with `b[4] < 2` (an ACK such as `01 0f`) carry no status and are ignored. Whether the board echoes the
+/// start frame `18 0f 00` (same bytes as a full-length `Finished`) is unknown: see `is_start_echo`.
 pub fn parse_calibration(b: &Body) -> Option<CalibrationEvent> {
-    if b[0] != CMD_TRIGGER || !matches!(b[5], SUB_CALIB_PROGRESS_OLD | SUB_CALIB_START) {
+    if b[0] != CMD_TRIGGER || !matches!(b[5], SUB_CALIB_PROGRESS_OLD | SUB_CALIB_START) || b[4] < 2 {
         return None;
     }
     Some(match b[6] {
@@ -160,5 +177,17 @@ mod tests {
         assert_eq!(parse_calibration(&body("21 00 00 00 18 0f 04")), Some(CalibrationEvent::Failed(4)));
         assert_eq!(parse_calibration(&body("21 00 00 00 01 00")), None);
         assert_eq!(parse_calibration(&body("21 00 00 00 05 01 05 00 6e")), None);
+    }
+
+    #[test]
+    fn calibration_acks_and_echoes_are_not_events() {
+        assert_eq!(parse_calibration(&body("21 00 00 00 01 0f 00")), None, "ACK shape");
+        assert_eq!(parse_calibration(&body("21 00 00 00 00 0f 00")), None, "no length");
+        assert_eq!(parse_calibration(&body("21 00 00 00 02 0f 00")), Some(CalibrationEvent::Finished));
+        let start = calibration_start_frame(Confirm::user_confirmed());
+        assert!(is_start_echo(&start));
+        assert_eq!(parse_calibration(&start), Some(CalibrationEvent::Finished), "indistinguishable: needs the window");
+        assert!(!is_start_echo(&body("21 00 00 00 02 0f 00")));
+        assert!(!is_start_echo(&body("21 00 00 00 18 0f 01")));
     }
 }

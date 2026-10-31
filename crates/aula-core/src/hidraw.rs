@@ -7,6 +7,7 @@ use std::io::{ErrorKind, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 pub const VENDOR_ID: u16 = 0x2e3c;
@@ -136,8 +137,16 @@ const DRAIN_MAX_TIME: Duration = Duration::from_millis(100);
 const LOCK_WAIT: Duration = Duration::from_secs(10);
 const LOCK_POLL: Duration = Duration::from_millis(20);
 
-/// `flock(LOCK_EX | LOCK_NB)`, retried until `wait` has passed.
-fn lock_file(file: &File, wait: Duration) -> Result<()> {
+static LOCK_ABORT: OnceLock<fn() -> bool> = OnceLock::new();
+
+/// Makes every lock wait of this process give up as soon as `abort` returns true (CLI: Ctrl-C while another
+/// process holds the board). The first call wins.
+pub fn set_lock_abort(abort: fn() -> bool) {
+    let _ = LOCK_ABORT.set(abort);
+}
+
+/// `flock(LOCK_EX | LOCK_NB)`, retried until `wait` has passed or `abort` returns true.
+fn lock_file(file: &File, wait: Duration, abort: Option<fn() -> bool>) -> Result<()> {
     let deadline = Instant::now() + wait;
     loop {
         // SAFETY: the descriptor stays open for the duration of the call.
@@ -149,6 +158,9 @@ fn lock_file(file: &File, wait: Duration) -> Result<()> {
             Some(libc::EINTR) => continue,
             Some(libc::EWOULDBLOCK) => {}
             _ => return Err(Error::Io(format!("lock: {e}"))),
+        }
+        if abort.is_some_and(|f| f()) {
+            return Err(Error::Busy("interrupted while waiting for the device; nothing was sent".into()));
         }
         if Instant::now() >= deadline {
             return Err(Error::Busy(format!(
@@ -278,7 +290,7 @@ impl Link for Device {
 
     fn lock(&mut self) -> Result<()> {
         if self.lock_depth == 0 {
-            lock_file(&self.file, self.lock_wait)?;
+            lock_file(&self.file, self.lock_wait, LOCK_ABORT.get().copied())?;
         }
         self.lock_depth += 1;
         Ok(())
@@ -377,5 +389,24 @@ mod tests {
         d.drain().unwrap();
         assert!(t.elapsed() < Duration::from_secs(1));
         fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn lock_wait_can_be_aborted() {
+        let dir = crate::store::temp_dir("lock-abort");
+        let path = dir.join("node");
+        fs::write(&path, b"").unwrap();
+        let holder = File::open(&path).unwrap();
+        let other = File::open(&path).unwrap();
+        lock_file(&holder, Duration::ZERO, None).unwrap();
+        let t = Instant::now();
+        let e = lock_file(&other, Duration::from_secs(5), Some(|| true)).unwrap_err();
+        assert!(matches!(&e, Error::Busy(m) if m.contains("interrupted")), "{e}");
+        assert!(t.elapsed() < Duration::from_secs(1), "gave up without waiting the full time");
+        let e = lock_file(&other, Duration::from_millis(30), Some(|| false)).unwrap_err();
+        assert!(matches!(&e, Error::Busy(m) if m.contains("waited")), "{e}");
+        unlock_file(&holder);
+        lock_file(&other, Duration::ZERO, Some(|| true)).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

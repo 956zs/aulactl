@@ -328,6 +328,29 @@ impl<L: Link> Keyboard<L> {
         })
     }
 
+    /// Writes one custom slot without changing which slot Custom mode shows: the board shows the slot written
+    /// last (protocol 5.5), so when `slot` is not the active one the active slot is rewritten afterwards.
+    pub fn write_custom_colors_keep_active(&mut self, slot: u8, colors: &CustomColors) -> Result<()> {
+        lighting::check_slot(slot)?;
+        self.with_lock(|kb| {
+            let active = kb.read_active_custom_slot()?;
+            let shown = if slot == active { None } else { Some(kb.read_custom_colors(active)?) };
+            kb.write_custom_colors(slot, colors)?;
+            if let Some(shown) = shown {
+                kb.write_custom_colors(active, &shown)?;
+            }
+            kb.verify_active_custom_slot(active)
+        })
+    }
+
+    /// Checks that `09 20` reports `slot` as the slot Custom mode shows.
+    pub fn verify_active_custom_slot(&mut self, slot: u8) -> Result<()> {
+        match self.read_active_custom_slot()? {
+            s if s == slot => Ok(()),
+            s => Err(Error::Verify(format!("active custom slot is {s} after writing slot {slot} last"))),
+        }
+    }
+
     // ---- keymap and macros -----------------------------------------------------------------------------------
 
     /// Physical keys whose Fn-layer function is fixed (`0x0E`).
@@ -702,7 +725,7 @@ impl<L: Link> Keyboard<L> {
             self.link.unlock();
             return Err(e);
         }
-        Ok(Calibration { kb: self, stopped: false })
+        Ok(Calibration { kb: self, stopped: false, started: Instant::now() })
     }
 
     // ---- snapshot --------------------------------------------------------------------------------------------
@@ -788,6 +811,7 @@ impl<L: Link> Drop for TravelStream<'_, L> {
 pub struct Calibration<'a, L: Link> {
     kb: &'a mut Keyboard<L>,
     stopped: bool,
+    started: Instant,
 }
 
 impl<L: Link> Calibration<'_, L> {
@@ -801,6 +825,9 @@ impl<L: Link> Calibration<'_, L> {
             }
             match self.kb.link.recv(left)? {
                 Some(b) => {
+                    if travel::is_start_echo(&b) && self.started.elapsed() < travel::CALIBRATION_ECHO_WINDOW {
+                        continue;
+                    }
                     if let Some(e) = travel::parse_calibration(&b) {
                         return Ok(Some(e));
                     }

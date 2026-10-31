@@ -905,6 +905,10 @@ All other indices 0..131 are not keys: zero in every table, never set in masks.
 7. Whether the heartbeat is needed for anything on a wired board (nothing observed without it).
 8. Calibration, factory reset, trigger reset and the advanced-key payloads have never been seen on the wire.
    Test them only with the owner present.
+9. Calibration notification shape (10.3): aulactl assumes `b[4]` = length of `b[5..]` as in other notifications,
+   ignores `b[4] < 2` (ACK shape) and ignores a frame identical to the start request `21 00 00 00 18 0F 00`
+   within 100 ms of sending it (it would otherwise read as `b[6] = 0` finished). Re-check against the first real
+   calibration capture: what the board answers to start, and the `b[4]` of progress / finished frames.
 
 ---
 

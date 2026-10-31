@@ -15,6 +15,8 @@ pub const READ_LEN: usize = 40;
 const WRITE_B4: u8 = 0x32;
 
 const TYPE_DKS: u8 = 1;
+/// Bytes a DKS payload uses: type, 4 routes, 4 x (entry + 4 phases).
+const DKS_LEN: usize = 5 + 4 * 8;
 const TYPE_MT: u8 = 2;
 const TYPE_TGL: u8 = 3;
 
@@ -64,17 +66,26 @@ pub fn decode(p: &[u8]) -> Result<AdvancedKey> {
     }
     Ok(match p[0] {
         0 => AdvancedKey::Empty,
-        TYPE_DKS => AdvancedKey::Dks {
-            routes: [p[1], p[2], p[3], p[4]],
-            keys: (0..4)
+        // bytes past the 4 keys are not modelled: keep such a slot byte for byte
+        TYPE_DKS if p[DKS_LEN..READ_LEN].iter().any(|b| *b != 0) => other(p),
+        TYPE_DKS => {
+            let mut keys: Vec<DksKey> = (0..4)
                 .map(|j| DksKey { action: entry(p, 5 + 8 * j), phases: p[9 + 8 * j..13 + 8 * j].try_into().expect("4") })
-                .filter(|k| k.action != KeyAction::Default)
-                .collect(),
-        },
+                .collect();
+            // only all-zero trailing positions are dropped (encode writes them as zeros), so gaps keep their place
+            while keys.last().is_some_and(|k| k.action == KeyAction::Default && k.phases == [0; 4]) {
+                keys.pop();
+            }
+            AdvancedKey::Dks { routes: [p[1], p[2], p[3], p[4]], keys }
+        }
         TYPE_MT => AdvancedKey::ModTap { hold: entry(p, 1), tap: entry(p, 5), threshold: p[9] },
         TYPE_TGL => AdvancedKey::Toggle { action: entry(p, 1) },
-        _ => AdvancedKey::Other { payload: frame::hex(&p[..READ_LEN]).replace(' ', "") },
+        _ => other(p),
     })
+}
+
+fn other(p: &[u8]) -> AdvancedKey {
+    AdvancedKey::Other { payload: frame::hex(&p[..READ_LEN]).replace(' ', "") }
 }
 
 /// Encodes a slot payload (`READ_LEN` bytes; the write frame pads with zeros).
@@ -228,6 +239,30 @@ mod tests {
         assert_eq!(&p[13..21], &[0, 0xe1, 0, 0, 2, 3, 3, 0]);
         assert_eq!(&p[21..], &[0; 19]);
         assert_eq!(decode(&p).unwrap(), a);
+    }
+
+    #[test]
+    fn dks_gaps_and_phases_round_trip() {
+        let mut p = vec![0u8; READ_LEN];
+        p[..5].copy_from_slice(&[1, 15, 30, 30, 15]);
+        p[5..13].copy_from_slice(&[0, 4, 0, 0, 1, 0, 0, 0]); // KeyA
+        p[13..21].copy_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]); // gap
+        p[21..29].copy_from_slice(&[0, 5, 0, 0, 2, 3, 3, 0]); // KeyB in position 3
+        let a = decode(&p).unwrap();
+        let AdvancedKey::Dks { keys, .. } = &a else { panic!("{a:?}") };
+        assert_eq!(keys.len(), 3, "gap kept, trailing empty position dropped");
+        assert_eq!(keys[1], DksKey { action: KeyAction::Default, phases: [0; 4] });
+        assert_eq!(encode(&a).unwrap(), p);
+        // phases on an empty action are kept too
+        p[29..37].copy_from_slice(&[0, 0, 0, 0, 0, 0, 1, 0]);
+        let a = decode(&p).unwrap();
+        assert!(matches!(&a, AdvancedKey::Dks { keys, .. } if keys.len() == 4));
+        assert_eq!(encode(&a).unwrap(), p);
+        // unknown bytes past the keys: kept raw
+        p[38] = 7;
+        let a = decode(&p).unwrap();
+        assert!(matches!(a, AdvancedKey::Other { .. }));
+        assert_eq!(encode(&a).unwrap(), p);
     }
 
     #[test]
