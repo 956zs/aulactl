@@ -46,6 +46,10 @@ pub struct SimKeyboard {
     pub corrupt_next_write: Option<u8>,
     /// When set, every send fails like an unplugged device (`Error::Io`).
     pub io_error: bool,
+    /// Queued as input right after a travel test is opened (samples a key press would produce).
+    pub travel_script: Vec<Body>,
+    /// When set, the board "unplugs" once the travel script has been read: recv and send fail with `Error::Io`.
+    pub unplug_after_script: bool,
 }
 
 /// A macro write sequence: the next (slot, page) expected and the images written so far.
@@ -111,6 +115,8 @@ impl SimKeyboard {
             mute_cmd: None,
             corrupt_next_write: None,
             io_error: false,
+            travel_script: Vec::new(),
+            unplug_after_script: false,
         }
     }
 
@@ -348,6 +354,8 @@ impl SimKeyboard {
             (0x18, 2) => {
                 self.travel_open = true;
                 self.reply_ack(ack);
+                let script = self.travel_script.clone();
+                self.input.extend(script);
             }
             (0x18, 3) => {
                 self.travel_open = false;
@@ -400,6 +408,10 @@ impl Link for SimKeyboard {
     }
 
     fn recv(&mut self, _timeout: Duration) -> Result<Option<Body>> {
+        if self.unplug_after_script && self.travel_open && self.input.is_empty() {
+            self.io_error = true;
+            return Err(crate::Error::Io("read: the keyboard was disconnected (simulated)".into()));
+        }
         Ok(self.input.pop_front())
     }
 

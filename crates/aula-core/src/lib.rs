@@ -6,6 +6,7 @@
 
 pub mod advanced;
 pub mod error;
+pub mod feed;
 pub mod frame;
 pub mod hidraw;
 pub mod info;

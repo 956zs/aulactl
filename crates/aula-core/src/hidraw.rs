@@ -212,6 +212,12 @@ impl Device {
         &self.node
     }
 
+    /// How long `lock` waits for another process's operation (default 10 s). `aulactl feed` uses a short wait
+    /// and retries on its own.
+    pub fn set_lock_wait(&mut self, wait: Duration) {
+        self.lock_wait = wait;
+    }
+
     fn poll_readable(&self, timeout: Duration) -> Result<bool> {
         let mut pfd = libc::pollfd { fd: self.file.as_raw_fd(), events: libc::POLLIN, revents: 0 };
         let ms = timeout.as_millis().clamp(1, i32::MAX as u128) as i32;
