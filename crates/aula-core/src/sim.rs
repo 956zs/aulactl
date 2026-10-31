@@ -40,6 +40,8 @@ pub struct SimKeyboard {
     pub mute_cmd: Option<u8>,
     /// When set, the next write to this table is stored corrupted (to test read-back verification).
     pub corrupt_next_write: Option<u8>,
+    /// When set, every send fails like an unplugged device (`Error::Io`).
+    pub io_error: bool,
 }
 
 impl Default for SimKeyboard {
@@ -96,6 +98,7 @@ impl SimKeyboard {
             input: VecDeque::new(),
             mute_cmd: None,
             corrupt_next_write: None,
+            io_error: false,
         }
     }
 
@@ -360,6 +363,9 @@ impl SimKeyboard {
 
 impl Link for SimKeyboard {
     fn send(&mut self, body: &Body) -> Result<()> {
+        if self.io_error {
+            return Err(crate::Error::Io("write: No such device (simulated)".into()));
+        }
         self.sent.push(*body);
         self.handle(body)
     }
