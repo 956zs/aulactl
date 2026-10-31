@@ -1,0 +1,15 @@
+[package]
+name = "aula-core"
+description = "Protocol, hidraw transport and settings model for the AULA WIN 60 HE keyboard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# In-memory keyboard simulator (`sim` module) for tests of code built on `Keyboard`.
+sim = []
+
+[dependencies]
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
