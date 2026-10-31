@@ -1,8 +1,13 @@
 [package]
 name = "aulactl"
+description = "Configure the AULA WIN 60 HE keyboard on Linux over hidraw"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 aula-core.workspace = true
+libc.workspace = true
+
+[dev-dependencies]
+aula-core = { workspace = true, features = ["sim"] }
