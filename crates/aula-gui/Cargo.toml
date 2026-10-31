@@ -1,0 +1,8 @@
+[package]
+name = "aula-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aula-core.workspace = true
