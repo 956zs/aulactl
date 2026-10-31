@@ -278,13 +278,22 @@ const PHASE_LETTERS: [(u8, char); 4] = [
 ];
 
 /// A DKS output key: `ACTION:PPPP`, e.g. `KeyA:p--h`, `Space:t---`.
+/// A key action typed by the user. Raw entries are refused: they can only be kept as the board holds them
+/// (`keymap::RAW_NOT_KEPT`), never written from the command line.
+pub fn parse_action(v: &str) -> Result<KeyAction, String> {
+    match v.parse::<KeyAction>()? {
+        KeyAction::Raw(_) => Err(format!("{v}: {}", aula_core::keymap::RAW_NOT_KEPT)),
+        a => Ok(a),
+    }
+}
+
 pub fn parse_dks_key(v: &str) -> Result<DksKey, String> {
     let Some((action, phases)) = v.rsplit_once(':') else {
         return Err(format!(
             "'{v}' is not a DKS key (ACTION:PHASES, e.g. KeyA:p--h)"
         ));
     };
-    let action: KeyAction = action.parse()?;
+    let action = parse_action(action)?;
     let chars: Vec<char> = phases.chars().collect();
     if chars.len() != 4 {
         return Err(format!("'{phases}' needs 4 phases (- t p h, e.g. p--h)"));
@@ -518,16 +527,25 @@ mod tests {
     }
 
     #[test]
+    fn typed_actions_refuse_raw() {
+        assert_eq!(parse_action("KeyA").unwrap(), KeyAction::Key(0x04));
+        assert!(matches!(parse_action("Ctrl+Shift+Esc").unwrap(), KeyAction::Combo(_)));
+        assert!(parse_action("raw:10040300").unwrap_err().contains(aula_core::keymap::RAW_NOT_KEPT));
+        assert!(parse_action("RAW:00000000").is_err());
+        assert!(parse_action("").is_err());
+        assert!(parse_action("raw:zz").is_err());
+    }
+
+    #[test]
     fn dks_keys_and_routes() {
         let k = parse_dks_key("KeyA:p--h").unwrap();
         assert_eq!(k.action, KeyAction::Key(0x04));
         assert_eq!(k.phases, [PHASE_PRESS, PHASE_NONE, PHASE_NONE, PHASE_HOLD]);
         assert_eq!(phases_text(&k.phases), "p--h");
         assert_eq!(parse_dks_key("Space:1023").unwrap().phases, [1, 0, 2, 3]);
-        assert_eq!(
-            parse_dks_key("raw:00040000:t---").unwrap().action,
-            KeyAction::Raw([0, 4, 0, 0])
-        );
+        assert!(parse_dks_key("raw:00040000:t---")
+            .unwrap_err()
+            .contains(aula_core::keymap::RAW_NOT_KEPT));
         assert!(parse_dks_key("KeyA").is_err());
         assert!(parse_dks_key("KeyA:p-h").is_err());
         assert!(parse_dks_key("KeyA:x---").is_err());

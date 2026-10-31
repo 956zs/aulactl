@@ -107,7 +107,7 @@ pub fn keymap<L: Link>(c: &mut Cli<L>, rest: &[&str]) -> Result<(), String> {
             crate::put(c.out, &keymap_text(layer, &map, &fixed, all))
         }
         ["set", sel, action] => {
-            let action: KeyAction = action.parse()?;
+            let action = crate::args::parse_action(action)?;
             set_keys(c, layer, &select(Some(sel))?, |_| action.clone())
         }
         ["reset", sel] => set_keys(c, layer, &select(Some(sel))?, |idx| {
@@ -190,7 +190,7 @@ pub fn codes(out: &mut dyn Write, rest: &[&str]) -> Result<(), String> {
         say(out, &format!("{title}: {}", names.join(" ")))?;
     }
     if filter.is_none() {
-        say(out, "combinations: 2 or 3 keys with a modifier, e.g. Ctrl+Shift+Esc; raw entries: raw:xxxxxxxx")?;
+        say(out, "combinations: 2 or 3 keys with a modifier, e.g. Ctrl+Shift+Esc")?;
         say(
             out,
             "short names also work: a, 1, Esc, Del, PgUp, Left, LShift, RCtrl, Win, Menu",
@@ -403,21 +403,19 @@ pub fn advanced<L: Link>(c: &mut Cli<L>, rest: &[&str]) -> Result<(), String> {
                                 Some(p) => parse_routes(&[p; 4].join(","))?[0],
                                 None => 15,
                             };
-                            let max_tenths =
-                                (l.to_mm(l.max) * 10.0).round().clamp(1.0, 255.0) as u8;
-                            advanced::dks_default_routes(first, max_tenths)
+                            advanced::dks_default_routes(first, advanced::max_travel_01mm(&l))
                         }
                     };
                     AdvancedKey::Dks { routes, keys }
                 }
                 ("dks", _) => return Err("a DKS needs 1 to 4 output keys (ACTION:PHASES)".into()),
                 ("mt", [hold, tap]) => AdvancedKey::ModTap {
-                    hold: hold.parse()?,
-                    tap: tap.parse()?,
+                    hold: crate::args::parse_action(hold)?,
+                    tap: crate::args::parse_action(tap)?,
                     threshold: threshold.map(parse_threshold).transpose()?.unwrap_or(15),
                 },
                 ("tgl", [action]) => AdvancedKey::Toggle {
-                    action: action.parse()?,
+                    action: crate::args::parse_action(action)?,
                 },
                 _ => return Err(bad_args(&[&["adv"], rest].concat())),
             };

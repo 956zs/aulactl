@@ -26,8 +26,8 @@ back, and the first write of a run saves an automatic backup of all settings fir
 device
   list                          detected keyboards and their hidraw nodes
   info                          product, firmware, travel range, poll rate, capabilities
-  dump [FILE]                   all settings as JSON (stdout, or a new FILE)
-  backup [FILE]                 save all settings to a new FILE (default: the backups directory)
+  dump [FILE] [--force]         all settings as JSON (stdout, or a new FILE; --force replaces FILE)
+  backup [FILE] [--force]       save all settings to a new FILE (default: the backups directory)
   diff FILE                     what restoring FILE would change
   restore FILE [--yes]          show what FILE changes; write it with --yes
   profile list                  saved profiles
@@ -57,7 +57,7 @@ keys
   keymap show [--layer base|fn] [--all]
   keymap set KEYS ACTION [--layer base|fn]
                                 ACTION: KeyA, Esc, Fn, Default, VolumeUp, MouseLeft, Copy,
-                                Ctrl+Shift+Esc, Macro0..9, Adv0..39, raw:xxxxxxxx
+                                Ctrl+Shift+Esc, Macro0..9, Adv0..39
   keymap reset KEYS [--layer base|fn]
   keymap codes [FILTER]         every ACTION name
   macro list                    the 10 macro slots

@@ -12,7 +12,9 @@ use aula_core::Keyboard;
 use std::path::PathBuf;
 
 fn kb() -> Keyboard<SimKeyboard> {
-    Keyboard::with_link(SimKeyboard::owner_board()).unwrap()
+    let mut k = Keyboard::with_link(SimKeyboard::owner_board()).unwrap();
+    k.set_auto_backup(None);
+    k
 }
 
 /// A fresh directory for files a test writes.
@@ -697,4 +699,57 @@ fn travel_opens_and_closes_the_stream() {
     );
     assert!(!k.link().travel_open);
     assert!(run(&mut k, &["travel", "--seconds", "0"]).is_err());
+}
+
+#[test]
+fn output_files_are_never_clobbered_without_force() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new("noclobber");
+    let mut k = kb();
+    let file = dir.file("dump.json");
+    std::fs::write(&file, "keep").unwrap();
+    for cmd in ["dump", "backup"] {
+        let e = run(&mut k, &[cmd, &file]).unwrap_err();
+        assert!(e.contains("already exists") && e.contains("--force"), "{e}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "keep");
+    }
+    run(&mut k, &["dump", &file, "--force"]).unwrap();
+    assert!(aula_core::store::load_snapshot(std::path::Path::new(&file)).is_ok());
+    let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+    let other = dir.file("b.json");
+    run(&mut k, &["backup", &other]).unwrap();
+    run(&mut k, &["backup", &other, "--force"]).unwrap();
+    assert!(run(&mut k, &["dump", &file, &other]).is_err());
+}
+
+#[test]
+fn raw_entries_cannot_be_typed_or_restored() {
+    let dir = TempDir::new("raw");
+    let mut k = kb();
+    let start = k.link().sent.len();
+    for args in [
+        &["keymap", "set", "Caps", "raw:10040300"][..],
+        &["keymap", "set", "Caps", "raw:00000000", "--layer", "fn"],
+        &["adv", "set", "1", "tgl", "raw:00040000"],
+        &["adv", "set", "1", "mt", "raw:00040000", "KeyA"],
+        &["adv", "set", "1", "dks", "raw:00040000:t---"],
+    ] {
+        let e = run(&mut k, args).unwrap_err();
+        assert!(e.contains(aula_core::keymap::RAW_NOT_KEPT), "{args:?}: {e}");
+    }
+    assert_eq!(writes_since(&k, start), 0);
+
+    // a crafted restore file with a raw entry and a raw advanced slot
+    let mut snap = k.read_snapshot().unwrap();
+    snap.keymap.base.0.insert(66, KeyAction::Raw([0x99, 0, 0, 0]));
+    let file = dir.file("crafted.json");
+    aula_core::store::save_snapshot(std::path::Path::new(&file), &snap).unwrap();
+    let e = run(&mut k, &["restore", &file, "--yes"]).unwrap_err();
+    assert!(e.contains(aula_core::keymap::RAW_NOT_KEPT), "{e}");
+    let mut snap = k.read_snapshot().unwrap();
+    snap.advanced[4] = AdvancedKey::Other { payload: "07".repeat(40) };
+    aula_core::store::save_snapshot(std::path::Path::new(&file), &snap).unwrap();
+    assert!(run(&mut k, &["restore", &file, "--yes"]).is_err());
+    assert_eq!(writes_since(&k, start), 0, "nothing was written");
 }

@@ -55,28 +55,41 @@ pub fn info<L: Link>(c: &mut Cli<L>) -> Result<(), String> {
     say(c.out, &lines.join("\n"))
 }
 
-/// Refuses to replace an existing file.
-fn new_file(path: &Path) -> Result<(), String> {
-    if path.exists() {
+/// Refuses to replace an existing file unless `force` (checked again when writing).
+fn new_file(path: &Path, force: bool) -> Result<(), String> {
+    if !force && path.exists() {
         return Err(format!(
-            "{} already exists; pick a new file name",
+            "{} already exists; pick a new file name or add --force",
             path.display()
         ));
     }
     Ok(())
 }
 
+/// Saves `snap` to `path`: a new file, or any file with `force`.
+fn save(path: &Path, snap: &Snapshot, force: bool) -> Result<(), String> {
+    if force {
+        store::save_snapshot(path, snap)?;
+    } else {
+        store::save_snapshot_new(path, snap)
+            .map_err(|e| format!("{e} (or add --force)"))?;
+    }
+    Ok(())
+}
+
 pub fn dump<L: Link>(c: &mut Cli<L>, rest: &[&str]) -> Result<(), String> {
-    match rest {
+    let mut a = Args::new(rest);
+    let force = a.flag("--force");
+    match a.positional()?[..] {
         [] => {
             let snap = c.kb.read_snapshot()?;
             say(c.out, &snap.to_json()?)
         }
         [file] => {
             let path = Path::new(file);
-            new_file(path)?;
+            new_file(path, force)?;
             let snap = c.kb.read_snapshot()?;
-            store::save_snapshot(path, &snap)?;
+            save(path, &snap, force)?;
             say(c.out, &format!("saved to {}", path.display()))
         }
         _ => Err(bad_args(&[&["dump"], rest].concat())),
@@ -84,24 +97,26 @@ pub fn dump<L: Link>(c: &mut Cli<L>, rest: &[&str]) -> Result<(), String> {
 }
 
 pub fn backup<L: Link>(c: &mut Cli<L>, rest: &[&str]) -> Result<(), String> {
-    let path = match rest {
+    let mut a = Args::new(rest);
+    let force = a.flag("--force");
+    let path = match a.positional()?[..] {
         [] => None,
         [file] => Some(PathBuf::from(file)),
         _ => return Err(bad_args(&[&["backup"], rest].concat())),
     };
     if let Some(p) = &path {
-        new_file(p)?;
+        new_file(p, force)?;
     }
     let snap = c.kb.read_snapshot()?;
     let path = match path {
         Some(p) => p,
-        None => store::backups_dir()?.join(format!(
-            "backup-{}.json",
-            store::timestamp(snap.created_unix)
-        )),
+        None => {
+            let dir = store::backups_dir()?;
+            store::private_dir(&dir)?;
+            dir.join(format!("backup-{}.json", store::timestamp(snap.created_unix)))
+        }
     };
-    new_file(&path)?;
-    store::save_snapshot(&path, &snap)?;
+    save(&path, &snap, force)?;
     put(c.out, &summary(&snap))?;
     say(c.out, &format!("saved to {}", path.display()))
 }
@@ -129,45 +144,46 @@ pub fn restore<L: Link>(c: &mut Cli<L>, rest: &[&str]) -> Result<Outcome, String
     apply(c, &want, yes, &format!("aulactl restore {file} --yes"))
 }
 
-/// Shows what `want` changes, and writes it when `yes`.
+/// Shows what `want` changes, and writes it when `yes`. The board is read and written under one device lock,
+/// so what is compared is what is overwritten.
 fn apply<L: Link>(
     c: &mut Cli<L>,
     want: &Snapshot,
     yes: bool,
     again: &str,
 ) -> Result<Outcome, String> {
-    let now = c.kb.read_snapshot()?;
-    if want.device.firmware != now.device.firmware {
-        say(
-            c.out,
-            &format!(
+    let mut lines = Vec::new();
+    let written = c.kb.with_lock(|kb| {
+        let now = kb.read_snapshot()?;
+        if want.device.firmware != now.device.firmware {
+            lines.push(format!(
                 "note: saved on firmware {}, the keyboard runs {}",
                 want.device.firmware, now.device.firmware
-            ),
-        )?;
-    }
-    let changes = snapshot::diff(&now, want);
-    if changes.is_empty() {
-        say(
-            c.out,
-            "nothing to change: the keyboard already has these settings",
-        )?;
-        return Ok(Outcome::Done);
-    }
-    for ch in &changes {
-        say(c.out, &ch.to_string())?;
-    }
-    if !yes {
-        say(
-            c.out,
-            &format!(
+            ));
+        }
+        let changes = snapshot::diff(&now, want);
+        if changes.is_empty() {
+            lines.push("nothing to change: the keyboard already has these settings".into());
+            return Ok(None);
+        }
+        lines.extend(changes.iter().map(|ch| ch.to_string()));
+        if !yes {
+            lines.push(format!(
                 "{} differences; nothing was written. Run '{again}' to write them.",
                 changes.len()
-            ),
-        )?;
-        return Ok(Outcome::Done);
+            ));
+            return Ok(None);
+        }
+        // a failed write is reported after the differences
+        Ok(Some(kb.apply_snapshot(want, &now)))
+    });
+    for l in &lines {
+        say(c.out, l)?;
     }
-    let report = c.kb.apply_snapshot(want, &now)?;
+    let Some(report) = written? else {
+        return Ok(Outcome::Done);
+    };
+    let report = report?;
     c.report_backup()?;
     say(
         c.out,
