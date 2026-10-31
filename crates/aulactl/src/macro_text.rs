@@ -2,7 +2,8 @@
 //!
 //! Steps are separated by `,` or `;`. `down X` / `up X` press or release X, `tap X` is `down X, up X`, and
 //! `wait MS` sets the delay after the previous event (several waits add up). Events not followed by a wait
-//! get the default delay. X is a key name (`KeyA`, `a`, `Esc`, `LShift`, `0x04`) or `MouseLeft`,
+//! get the default delay. The last event has no delay (the board stores 0, like the official driver), so a
+//! macro cannot end with a wait. X is a key name (`KeyA`, `a`, `Esc`, `LShift`, `0x04`) or `MouseLeft`,
 //! `MouseRight`, `MouseMiddle`, `mouse:N` (button bits).
 
 use aula_core::keycodes::Usage;
@@ -96,6 +97,12 @@ pub fn parse(text: &str, default_delay: u16) -> Result<Vec<MacroEvent>, String> 
     if events.is_empty() {
         return Err("a macro needs at least one step".into());
     }
+    if waited {
+        return Err("a macro cannot end with a wait (the last event has no delay)".into());
+    }
+    if let Some(last) = events.last_mut() {
+        last.delay_ms = 0;
+    }
     if events.len() > MAX_EVENTS {
         return Err(format!(
             "a macro holds at most {MAX_EVENTS} events (a tap is 2), got {}",
@@ -106,7 +113,8 @@ pub fn parse(text: &str, default_delay: u16) -> Result<Vec<MacroEvent>, String> 
 }
 
 /// Text form of `events`: waits equal to `default_delay` are left out, a down immediately followed by its up
-/// becomes `tap`. `parse(&format(e, d), d)` gives `e` back.
+/// becomes `tap`, the last event's delay is not shown. `parse(&format(e, d), d)` gives `e` back with the
+/// last delay 0.
 pub fn format(events: &[MacroEvent], default_delay: u16) -> String {
     let mut steps = Vec::new();
     let mut i = 0;
@@ -128,10 +136,10 @@ pub fn format(events: &[MacroEvent], default_delay: u16) -> String {
                 e
             }
         };
-        if last.delay_ms != default_delay {
+        i += 1;
+        if i < events.len() && last.delay_ms != default_delay {
             steps.push(format!("wait {}", last.delay_ms));
         }
-        i += 1;
     }
     steps.join(", ")
 }
@@ -181,16 +189,21 @@ mod tests {
                 key(4, true, 10),
                 key(4, false, 10),
                 key(5, true, 10),
-                key(5, false, 10)
+                key(5, false, 0)
             ])
         );
         assert_eq!(
-            parse("tap a, wait 5, wait 7ms", 10),
-            Ok(vec![key(4, true, 10), key(4, false, 12)])
+            parse("tap a, wait 5, wait 7ms, tap b", 10),
+            Ok(vec![
+                key(4, true, 10),
+                key(4, false, 12),
+                key(5, true, 10),
+                key(5, false, 0)
+            ])
         );
         assert_eq!(
             parse("down LShift, wait 0, up LShift", 10),
-            Ok(vec![key(0xe1, true, 0), key(0xe1, false, 10)])
+            Ok(vec![key(0xe1, true, 0), key(0xe1, false, 0)])
         );
         assert_eq!(
             parse(" DOWN esc ,, UP 0x29 ,", 0),
@@ -221,6 +234,8 @@ mod tests {
             ("tap a, wait -1", "not a delay"),
             ("tap a, wait 65536", "not a delay"),
             ("tap a, wait 65535, wait 1", "at most 65535"),
+            ("tap a, wait 10", "cannot end with a wait"),
+            ("tap a, wait 10,", "cannot end with a wait"),
             ("down mouse:16", "mouse buttons"),
             ("down mouse:0", "mouse buttons"),
         ] {
@@ -242,11 +257,11 @@ mod tests {
             key(0xe1, true, 10),
             key(5, true, 10),
             key(5, false, 10),
-            key(0xe1, false, 10),
+            key(0xe1, false, 0),
         ];
         assert_eq!(
             format(&ev, 0),
-            "down KeyA, wait 20, up KeyA, down ShiftLeft, wait 10, down KeyB, wait 10, up KeyB, wait 10, up ShiftLeft, wait 10"
+            "down KeyA, wait 20, up KeyA, down ShiftLeft, wait 10, down KeyB, wait 10, up KeyB, wait 10, up ShiftLeft"
         );
         assert_eq!(
             format(&ev, 10),
@@ -255,6 +270,10 @@ mod tests {
         for d in [0, 10, 20] {
             assert_eq!(parse(&format(&ev, d), d).unwrap(), ev, "default {d}");
         }
+        // a last delay read from an older board image is not shown
+        let mut old = ev.clone();
+        old.last_mut().unwrap().delay_ms = 50;
+        assert_eq!(format(&old, 10), format(&ev, 10));
         let mouse = vec![
             MacroEvent {
                 input: MacroInput::Mouse(1),

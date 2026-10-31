@@ -328,6 +328,10 @@ fn macros_with_binding() {
     let m = k.read_macro(2).unwrap().unwrap();
     assert_eq!((m.mode, m.repeat, m.events.len()), (PlayMode::Repeat, 3, 4));
     assert_eq!(m.events[1].delay_ms, 30);
+    assert_eq!(m.events[3].delay_ms, 0, "last event has no delay");
+    // only one 0..9 macro sequence was written
+    let pages: Vec<u8> = k.link().sent.iter().filter(|b| b[0] == 0x19 && b[1] < 0x80).map(|b| b[1]).collect();
+    assert_eq!(pages, (0..10u8).flat_map(|s| [s; 5]).collect::<Vec<_>>());
     let list = run(&mut k, &["macro", "list"]).unwrap();
     assert!(
         list.lines().nth(2).unwrap().ends_with("[on KeyF]"),
@@ -335,7 +339,7 @@ fn macros_with_binding() {
     );
     assert!(list.starts_with("0: empty\n"));
     let show = run(&mut k, &["macro", "show", "2"]).unwrap();
-    assert!(show.contains("aulactl macro set 2 \"down KeyA, wait 10, up KeyA, wait 30, down KeyB, wait 10, up KeyB, wait 10\" --mode repeat --repeat 3 --delay 0"), "{show}");
+    assert!(show.contains("aulactl macro set 2 \"down KeyA, wait 10, up KeyA, wait 30, down KeyB, wait 10, up KeyB\" --mode repeat --repeat 3 --delay 0"), "{show}");
 
     let out = run(&mut k, &["macro", "clear", "2"]).unwrap();
     assert!(out.contains("still bound to Macro2: KeyF"), "{out}");
@@ -531,11 +535,17 @@ fn lighting() {
         .unwrap_err()
         .contains("light effect MODE"));
 
+    let effect = k.read_effect().unwrap();
     let out = run(
         &mut k,
         &["light", "custom", "set", "wasd", "#00ff00", "--slot", "1"],
     )
     .unwrap();
+    assert_eq!(
+        k.read_effect().unwrap(),
+        effect,
+        "the board switched to Custom; the effect was put back"
+    );
     assert!(
         out.starts_with("custom slot 1: #00ff00 on KeyW KeyA KeyS KeyD\n")
             && out.contains("custom slot 0 is still shown")
