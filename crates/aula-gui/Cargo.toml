@@ -1,8 +1,18 @@
 [package]
 name = "aula-gui"
+description = "Settings app (QML + Rust) for the AULA WIN 60 HE keyboard"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-aula-core.workspace = true
+aula-core = { workspace = true, features = ["sim"] }
+cxx.workspace = true
+cxx-qt.workspace = true
+cxx-qt-lib = { workspace = true, features = ["qt_gui", "qt_qml", "qt_quickcontrols"] }
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[build-dependencies]
+cxx-qt-build.workspace = true
