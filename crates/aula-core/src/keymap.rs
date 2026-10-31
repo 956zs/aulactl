@@ -360,6 +360,24 @@ pub fn check_fn_fixed(map: &Keymap, fixed: &[usize]) -> Result<()> {
     Ok(())
 }
 
+/// Error for a raw entry or payload that is not what the board already holds.
+pub const RAW_NOT_KEPT: &str = "raw entries can only be kept, not written";
+
+/// Raw entries are only ever written back unchanged: each `Raw` in `map` must be what `current` (the board's
+/// layer) holds for that key.
+pub fn check_raw_kept(map: &Keymap, current: &Keymap) -> Result<()> {
+    for (idx, a) in map.iter() {
+        if matches!(a, KeyAction::Raw(_)) && current.get(idx) != Some(a) {
+            return invalid(format!("{}: {a}: {RAW_NOT_KEPT}", key_name(idx)));
+        }
+    }
+    Ok(())
+}
+
+pub fn has_raw(map: &Keymap) -> bool {
+    map.iter().any(|(_, a)| matches!(a, KeyAction::Raw(_)))
+}
+
 /// Read request selector for a layer.
 pub fn read_selector(layer: Layer) -> u8 {
     0x80 | layer.selector()
@@ -557,5 +575,23 @@ mod tests {
         assert_eq!(read_selector(Layer::Base), 0x80);
         assert_eq!(read_selector(Layer::Fn), 0x82);
         assert_eq!(Layer::Fn.selector(), 2);
+    }
+
+    #[test]
+    fn raw_entries_must_be_kept() {
+        let mut board = Keymap::new();
+        board.0.insert(68, KeyAction::Raw([0x10, 5, 0, 0]));
+        let mut m = board.clone();
+        assert!(has_raw(&m));
+        assert!(check_raw_kept(&m, &board).is_ok());
+        m.0.insert(66, KeyAction::Key(0x29));
+        assert!(check_raw_kept(&m, &board).is_ok(), "other keys may change");
+        m.0.insert(69, KeyAction::Raw([1, 2, 3, 4]));
+        assert!(check_raw_kept(&m, &board).unwrap_err().to_string().contains(RAW_NOT_KEPT));
+        m.0.remove(&69);
+        m.0.insert(68, KeyAction::Raw([0x10, 6, 0, 0]));
+        assert!(check_raw_kept(&m, &board).is_err());
+        assert!(check_raw_kept(&Keymap::new(), &Keymap::new()).is_ok());
+        assert!(!has_raw(&Keymap::new()));
     }
 }

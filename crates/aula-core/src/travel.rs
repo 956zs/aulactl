@@ -56,8 +56,8 @@ pub fn parse_sample(b: &Body) -> Option<TravelSample> {
     }
 }
 
-/// `21 00 00 00 18 0F 00`: start any-key calibration.
-pub fn calibration_start_frame() -> Body {
+/// `21 00 00 00 18 0F 00`: start any-key calibration. DESTRUCTIVE (overwrites the calibration data).
+pub fn calibration_start_frame(_: Confirm) -> Body {
     frame::trigger_request(TRIGGER_B4, SUB_CALIB_START, &[0])
 }
 
@@ -140,10 +140,10 @@ mod tests {
 
     #[test]
     fn calibration_frames() {
-        assert_eq!(calibration_start_frame(), body("21 00 00 00 18 0f 00"));
-        assert_eq!(calibration_stop_frame(), body("21 00 00 00 18 10 00"));
-        assert!(check_allowed(&calibration_start_frame()).is_ok());
         let c = Confirm::user_confirmed();
+        assert_eq!(calibration_start_frame(c), body("21 00 00 00 18 0f 00"));
+        assert_eq!(calibration_stop_frame(), body("21 00 00 00 18 10 00"));
+        assert!(check_allowed(&calibration_start_frame(c)).is_ok());
         assert_eq!(trigger_reset_frame(c), body("21 00 00 00 18 06"));
         assert_eq!(factory_reset_frame(c), body("14 00 00 00 01 01"));
         assert!(check_allowed(&factory_reset_frame(c)).is_ok());

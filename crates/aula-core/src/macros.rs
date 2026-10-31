@@ -2,7 +2,7 @@
 
 use crate::error::{invalid, protocol, Result};
 use crate::frame::TableSpec;
-use crate::keycodes::Usage;
+use crate::keycodes::{name_of_usage, Usage};
 use serde::{Deserialize, Serialize};
 
 /// One slot image, 58-byte pages.
@@ -83,7 +83,9 @@ impl Macro {
         }
         for (i, e) in self.events.iter().enumerate() {
             match e.input {
-                MacroInput::Key(u) if u.0 == 0 => return invalid(format!("event {i}: key usage 0")),
+                MacroInput::Key(u) if name_of_usage(u.0).is_none() => {
+                    return invalid(format!("event {i}: {u} is not in the keycode table"))
+                }
                 MacroInput::Mouse(m) if m == 0 || m > 0x0f => {
                     return invalid(format!("event {i}: mouse button {m} (use 1 left, 2 right, 4 middle)"))
                 }

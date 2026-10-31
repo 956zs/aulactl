@@ -230,6 +230,67 @@ pub fn changed_tables(new: &Snapshot, old: &Snapshot) -> Vec<String> {
     v
 }
 
+/// Checks every table `apply` will write before the first write, so a bad file changes nothing. Raw keymap
+/// entries and raw advanced-key slots are only accepted unchanged from `old` (`keymap::RAW_NOT_KEPT`).
+fn validate<L: Link>(kb: &mut Keyboard<L>, new: &Snapshot, old: &Snapshot, tables: &[String]) -> Result<()> {
+    let limits = kb.travel_limits()?;
+    for (idx, t) in new.trigger.iter() {
+        t.validate(&limits).map_err(|e| Error::Invalid(format!("trigger {}: {e}", key_name(idx))))?;
+    }
+    for (layer, map, was) in [
+        (Layer::Base, &new.keymap.base, &old.keymap.base),
+        (Layer::Fn, &new.keymap.fn_layer, &old.keymap.fn_layer),
+    ] {
+        crate::keymap::encode_layer(layer, map)?;
+        crate::keymap::check_raw_kept(map, was).map_err(|e| Error::Invalid(format!("{} layer: {e}", layer.name())))?;
+    }
+    for (s, m) in new.macros.iter().enumerate() {
+        if old.macros.get(s) != Some(m) {
+            macros::encode(m.as_ref()).map_err(|e| Error::Invalid(format!("macro slot {s}: {e}")))?;
+        }
+    }
+    let max_travel = crate::advanced::max_travel_01mm(&limits);
+    for (s, a) in new.advanced.iter().enumerate() {
+        if old.advanced.get(s) == Some(a) {
+            continue;
+        }
+        if a.has_raw() {
+            return invalid(format!("advanced-key slot {s}: {}", crate::keymap::RAW_NOT_KEPT));
+        }
+        crate::advanced::encode(a)
+            .and_then(|_| a.check_travel(max_travel))
+            .map_err(|e| Error::Invalid(format!("advanced-key slot {s}: {e}")))?;
+    }
+    let changed = |name: &str| tables.iter().any(|t| t == name);
+    if changed("fn layer") {
+        crate::keymap::check_fn_fixed(&new.keymap.fn_layer, &kb.read_fn_fixed()?)?;
+    }
+    if changed("lighting effect") {
+        new.lighting.effect.validate(&kb.read_mode_list()?)?;
+    }
+    if let Some(custom) = &new.lighting.custom {
+        for (s, c) in custom.iter().enumerate() {
+            if changed(&format!("custom colours slot {s}")) {
+                crate::lighting::encode_custom(c).map_err(|e| Error::Invalid(format!("custom colours slot {s}: {e}")))?;
+            }
+        }
+    }
+    if let (true, Some(d)) = (changed("dead band"), &new.dead_band) {
+        crate::trigger::encode_dead_band(d)?;
+        crate::trigger::validate_dead_band(d, &limits).map_err(|e| Error::Invalid(format!("dead band {e}")))?;
+    }
+    if let (true, Some(t)) = (changed("switch types"), &new.switch_types) {
+        crate::trigger::encode_switch_table(t, &kb.read_switch_list()?)?;
+    }
+    if let (true, Some(socd)) = (changed("SOCD pairs"), &new.socd) {
+        crate::socd::encode_pairs(&socd.pairs)?;
+    }
+    if let (true, Some(k)) = (changed("poll rate"), new.poll_rate_khz) {
+        crate::trigger::poll_rate_frame(k)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn apply<L: Link>(kb: &mut Keyboard<L>, new: &Snapshot, old: &Snapshot) -> Result<ApplyReport> {
     new.check_shape()?;
     let caps = *kb.capabilities()?;
@@ -245,24 +306,8 @@ pub(crate) fn apply<L: Link>(kb: &mut Keyboard<L>, new: &Snapshot, old: &Snapsho
     has(new.switch_types.is_some(), caps.switch_types(), "switch types")?;
     has(new.poll_rate_khz.is_some(), caps.poll_rate(), "poll rate")?;
     has(new.socd.is_some(), caps.socd, "SOCD")?;
-    // validate before the first write
-    let limits = kb.travel_limits()?;
-    for (idx, t) in new.trigger.iter() {
-        t.validate(&limits).map_err(|e| Error::Invalid(format!("trigger {}: {e}", key_name(idx))))?;
-    }
-    crate::keymap::encode_layer(Layer::Base, &new.keymap.base)?;
-    crate::keymap::encode_layer(Layer::Fn, &new.keymap.fn_layer)?;
-    for m in new.macros.iter() {
-        macros::encode(m.as_ref())?;
-    }
-    for a in &new.advanced {
-        crate::advanced::encode(a)?;
-    }
-    if new.lighting.effect != old.lighting.effect {
-        new.lighting.effect.validate(&kb.read_mode_list()?)?;
-    }
-
     let tables = changed_tables(new, old);
+    validate(kb, new, old, &tables)?;
     let mut report = ApplyReport::default();
     kb.with_lock(|kb| {
         for t in &tables {

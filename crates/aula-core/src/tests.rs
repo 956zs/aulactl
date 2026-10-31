@@ -17,7 +17,9 @@ use std::ops::ControlFlow;
 use std::time::Duration;
 
 fn kb() -> Keyboard<SimKeyboard> {
-    Keyboard::with_link(SimKeyboard::owner_board()).unwrap()
+    let mut k = Keyboard::with_link(SimKeyboard::owner_board()).unwrap();
+    k.set_auto_backup(None);
+    k
 }
 
 fn writes(kb: &Keyboard<SimKeyboard>) -> Vec<frame::Body> {
@@ -406,4 +408,177 @@ fn diff_texts() {
     assert!(d.contains(&"macros: slot 9: empty -> 2 events, Once, repeat 1".to_string()), "{d:?}");
     assert!(d.contains(&"poll rate: 8 kHz -> 1 kHz (the keyboard restarts)".to_string()));
     assert_eq!(changed_tables(&new, &old).last().unwrap(), "poll rate", "poll rate goes last");
+}
+
+// ---- security fixes ----------------------------------------------------------------------------------------
+
+/// The sim board with a raw (undecodable) entry on KeyA in the base layer and a raw advanced slot 5.
+fn kb_with_raw() -> Keyboard<SimKeyboard> {
+    let mut k = kb();
+    k.link_mut().keymap[0][68 * 4..68 * 4 + 4].copy_from_slice(&[0x10, 0x05, 0, 0]);
+    let mut slot = [0u8; 40];
+    slot[0] = 9;
+    slot[1] = 0xaa;
+    k.link_mut().advanced[5] = slot;
+    k
+}
+
+#[test]
+fn raw_keymap_entries_are_only_kept() {
+    let mut k = kb_with_raw();
+    let mut m = k.read_keymap(Layer::Base).unwrap();
+    assert_eq!(m.get(68), Some(&KeyAction::Raw([0x10, 5, 0, 0])));
+    // keeping it while changing another key is fine
+    m.0.insert(66, KeyAction::Key(0x29));
+    k.write_keymap(Layer::Base, &m).unwrap();
+    assert_eq!(k.read_keymap(Layer::Base).unwrap().get(68), Some(&KeyAction::Raw([0x10, 5, 0, 0])));
+    // a new raw entry is refused before anything is written
+    let before = writes(&k).len();
+    m.0.insert(69, KeyAction::Raw([0x99, 1, 2, 3]));
+    let e = k.write_keymap(Layer::Base, &m).unwrap_err();
+    assert!(e.to_string().contains(crate::keymap::RAW_NOT_KEPT), "{e}");
+    // changed raw bytes on a key that holds raw are refused too
+    m.0.insert(69, KeyAction::Default);
+    m.0.insert(68, KeyAction::Raw([0x10, 6, 0, 0]));
+    assert!(k.write_keymap(Layer::Base, &m).is_err());
+    assert_eq!(writes(&k).len(), before, "nothing was written");
+}
+
+#[test]
+fn raw_advanced_slots_are_only_kept() {
+    let mut k = kb_with_raw();
+    let current = k.read_advanced().unwrap();
+    assert!(current[5].has_raw());
+    // writing it back unchanged is allowed
+    k.write_advanced(&[(5, current[5].clone())]).unwrap();
+    let before = writes(&k).len();
+    let forged = AdvancedKey::Other { payload: "ff".repeat(40) };
+    assert!(k.write_advanced(&[(5, forged.clone())]).unwrap_err().to_string().contains(crate::keymap::RAW_NOT_KEPT));
+    assert!(k.write_advanced(&[(6, current[5].clone())]).is_err(), "not what slot 6 holds");
+    let raw_action = AdvancedKey::Toggle { action: KeyAction::Raw([0x99, 0, 0, 0]) };
+    assert!(k.write_advanced(&[(7, raw_action)]).is_err());
+    assert_eq!(writes(&k).len(), before, "nothing was written");
+}
+
+#[test]
+fn apply_refuses_raw_that_the_board_does_not_hold() {
+    let mut k = kb_with_raw();
+    let old = k.read_snapshot().unwrap();
+    // a round trip of a snapshot with raw entries is fine
+    let mut keep = old.clone();
+    keep.keymap.base.0.insert(66, KeyAction::Key(0x29));
+    k.apply_snapshot(&keep, &old).unwrap();
+    let old = k.read_snapshot().unwrap();
+    let forges: [fn(&mut Snapshot); 4] = [
+        |s: &mut Snapshot| {
+            s.keymap.fn_layer.0.insert(45, KeyAction::Raw([0x14, 0, 0, 0]));
+        },
+        |s: &mut Snapshot| {
+            s.keymap.base.0.insert(68, KeyAction::Raw([0x10, 7, 0, 0]));
+        },
+        |s: &mut Snapshot| s.advanced[1] = AdvancedKey::Other { payload: "01".repeat(40) },
+        |s: &mut Snapshot| {
+            s.advanced[2] = AdvancedKey::ModTap { hold: KeyAction::Raw([1, 2, 3, 4]), tap: KeyAction::Key(4), threshold: 20 }
+        },
+    ];
+    for forge in forges {
+        let mut new = old.clone();
+        forge(&mut new);
+        let before = writes(&k).len();
+        let e = k.apply_snapshot(&new, &old).unwrap_err();
+        assert!(e.to_string().contains(crate::keymap::RAW_NOT_KEPT), "{e}");
+        assert_eq!(writes(&k).len(), before);
+    }
+}
+
+#[test]
+fn dks_routes_and_dead_band_are_checked_against_the_travel() {
+    let mut k = kb();
+    let dks = |r: u8| AdvancedKey::Dks {
+        routes: [15, r, r, 15],
+        keys: vec![crate::advanced::DksKey { action: KeyAction::Key(4), phases: [1, 0, 0, 0] }],
+    };
+    k.write_advanced(&[(0, dks(34))]).unwrap(); // 3.4 mm = full travel
+    let before = writes(&k).len();
+    assert!(matches!(k.write_advanced(&[(0, dks(35))]), Err(Error::Invalid(_))));
+    let mut d = PerKey::new();
+    d.0.insert(46, DeadBand { top: 100, bottom: 100 });
+    k.write_dead_band(&d).unwrap(); // 2.00 mm of 3.40
+    d.0.insert(46, DeadBand { top: 0, bottom: 101 });
+    assert!(matches!(k.write_dead_band(&d), Err(Error::Invalid(_))));
+    assert_eq!(writes(&k).len(), before + 5, "only the good dead band (5 pages) was written");
+    // the same checks run in apply, before the first write
+    let old = k.read_snapshot().unwrap();
+    let mut new = old.clone();
+    new.win_lock.alt_tab = !old.win_lock.alt_tab;
+    new.advanced[1] = dks(200);
+    let before = writes(&k).len();
+    assert!(k.apply_snapshot(&new, &old).unwrap_err().to_string().contains("beyond the full travel"));
+    assert_eq!(writes(&k).len(), before);
+}
+
+#[test]
+fn apply_validates_every_table_before_the_first_write() {
+    let mut k = kb();
+    let old = k.read_snapshot().unwrap();
+    type Forge = fn(&mut Snapshot);
+    let forges: [(Forge, &str); 7] = [
+        (|s| { s.keymap.fn_layer.0.insert(46, KeyAction::Key(0x52)); }, "Fn-fixed key"),
+        (|s| { s.dead_band.as_mut().unwrap().0.insert(46, DeadBand { top: 200, bottom: 0 }); }, "dead band"),
+        (|s| { s.switch_types.as_mut().unwrap().0.insert(46, 4); }, "switch"),
+        (|s| s.socd.as_mut().unwrap().pairs = vec![SocdPair { mode: SocdMode::LastWins, key1: Usage(1), key2: Usage(7) }; 1], "SOCD"),
+        (|s| s.socd.as_mut().unwrap().pairs = vec![SocdPair { mode: SocdMode::LastWins, key1: Usage(4), key2: Usage(7) }; 21], "SOCD"),
+        (|s| { s.lighting.custom.as_mut().unwrap()[1].0.insert(200, Rgb(1, 2, 3)); }, "custom colours"),
+        (|s| s.macros[3] = Some(simple_sequence(3, &[Usage(4), Usage(0xa5)], 0)), "macro slot 3"),
+    ];
+    for (forge, what) in forges {
+        let mut new = old.clone();
+        new.win_lock.alt_tab = !old.win_lock.alt_tab; // applied first if validation were per table
+        new.lighting.effect.brightness = 3;
+        forge(&mut new);
+        let before = writes(&k).len();
+        let e = k.apply_snapshot(&new, &old);
+        assert!(e.is_err(), "{what} accepted");
+        assert_eq!(writes(&k).len(), before, "{what}: something was written before validation failed");
+    }
+}
+
+#[test]
+fn macro_usages_must_be_in_the_keycode_table() {
+    let mut k = kb();
+    assert!(k.write_macro(0, Some(&simple_sequence(0, &[Usage(0xa5)], 0))).is_err());
+    assert!(k.write_macro(0, Some(&simple_sequence(0, &[Usage(0)], 0))).is_err());
+    assert!(writes(&k).is_empty());
+    k.write_macro(0, Some(&simple_sequence(0, &[Usage(4)], 0))).unwrap();
+}
+
+#[test]
+fn writes_are_refused_without_a_backup_directory() {
+    let mut k = Keyboard::with_link(SimKeyboard::owner_board()).unwrap();
+    k.read_effect().unwrap();
+    let e = k.set_socd_enabled(true).unwrap_err();
+    assert!(matches!(e, Error::Refused(_)), "{e}");
+    assert!(writes(&k).is_empty());
+    k.set_auto_backup(None);
+    k.set_socd_enabled(true).unwrap();
+}
+
+#[test]
+fn backups_and_profiles_are_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    let dir = store::temp_dir("private");
+    let backups = dir.join("backups");
+    std::fs::create_dir(&backups).unwrap();
+    std::fs::set_permissions(&backups, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut k = kb();
+    k.set_auto_backup(Some(backups.clone()));
+    k.set_socd_enabled(true).unwrap();
+    assert_eq!(mode(&backups), 0o700, "existing directory narrowed");
+    assert_eq!(mode(k.last_backup().unwrap()), 0o600);
+    let p = store::Profiles::in_dir(dir.join("profiles"));
+    let path = p.save("x", &k.read_snapshot().unwrap(), false).unwrap();
+    assert_eq!(mode(p.dir()), 0o700);
+    assert_eq!(mode(&path), 0o600);
+    std::fs::remove_dir_all(&dir).unwrap();
 }

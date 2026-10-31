@@ -131,6 +131,48 @@ pub fn encode(a: &AdvancedKey) -> Result<Vec<u8>> {
     Ok(p)
 }
 
+impl AdvancedKey {
+    /// Whether the slot carries bytes aulactl does not model (`Other`, or a `Raw` key action), which may only
+    /// be kept, never written (`keymap::RAW_NOT_KEPT`).
+    pub fn has_raw(&self) -> bool {
+        let raw = |a: &KeyAction| matches!(a, KeyAction::Raw(_));
+        match self {
+            AdvancedKey::Empty => false,
+            AdvancedKey::Other { .. } => true,
+            AdvancedKey::Dks { keys, .. } => keys.iter().any(|k| raw(&k.action)),
+            AdvancedKey::ModTap { hold, tap, .. } => raw(hold) || raw(tap),
+            AdvancedKey::Toggle { action } => raw(action),
+        }
+    }
+
+    /// Checks DKS routes (0.1 mm) against the board's full travel (`max_travel_01mm`, in 0.1 mm).
+    pub fn check_travel(&self, max_travel_01mm: u8) -> Result<()> {
+        if let AdvancedKey::Dks { routes, .. } = self {
+            if let Some(r) = routes.iter().find(|r| **r > max_travel_01mm) {
+                return invalid(format!(
+                    "DKS route {r} (x 0.1 mm) is beyond the full travel of {max_travel_01mm} (x 0.1 mm)"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Slots with raw bytes must be exactly what `current` (the board's slots) holds.
+pub fn check_raw_kept(slots: &[(u8, AdvancedKey)], current: &[AdvancedKey]) -> Result<()> {
+    for (s, a) in slots {
+        if a.has_raw() && current.get(*s as usize) != Some(a) {
+            return invalid(format!("advanced-key slot {s}: {}", crate::keymap::RAW_NOT_KEPT));
+        }
+    }
+    Ok(())
+}
+
+/// Full travel in 0.1 mm (the unit of DKS routes).
+pub fn max_travel_01mm(l: &crate::trigger::TravelLimits) -> u8 {
+    (l.to_mm(l.max) * 10.0).round().clamp(1.0, u8::MAX as f64) as u8
+}
+
 /// DKS with the official defaults: route1 = route4 = `actuation` (0.1 mm), route2 = route3 = max travel
 /// - 0.4 mm (`max_travel_01mm` is in 0.1 mm).
 pub fn dks_default_routes(actuation: u8, max_travel_01mm: u8) -> [u8; 4] {
@@ -244,5 +286,36 @@ mod tests {
         assert_eq!(j, r#"{"type":"mod-tap","hold":"ControlLeft","tap":"Escape","threshold":20}"#);
         assert_eq!(serde_json::from_str::<AdvancedKey>(&j).unwrap(), a);
         assert_eq!(serde_json::to_string(&AdvancedKey::Empty).unwrap(), r#"{"type":"empty"}"#);
+    }
+
+    #[test]
+    fn raw_detection_and_kept_check() {
+        let raw = KeyAction::Raw([0x99, 0, 0, 0]);
+        let other = AdvancedKey::Other { payload: "09".repeat(READ_LEN) };
+        assert!(!AdvancedKey::Empty.has_raw());
+        assert!(other.has_raw());
+        assert!(AdvancedKey::Toggle { action: raw.clone() }.has_raw());
+        assert!(!AdvancedKey::Toggle { action: KeyAction::Key(4) }.has_raw());
+        assert!(AdvancedKey::ModTap { hold: KeyAction::Key(4), tap: raw.clone(), threshold: 20 }.has_raw());
+        assert!(AdvancedKey::Dks { routes: [1; 4], keys: vec![DksKey { action: raw, phases: [0; 4] }] }.has_raw());
+        let current = vec![AdvancedKey::Empty, other.clone()];
+        assert!(check_raw_kept(&[(1, other.clone())], &current).is_ok());
+        assert!(check_raw_kept(&[(0, AdvancedKey::Empty)], &current).is_ok());
+        assert!(check_raw_kept(&[(0, other.clone())], &current).is_err());
+        assert!(check_raw_kept(&[(39, other)], &current).is_err(), "slot beyond the board's list");
+        assert!(check_raw_kept(&[], &[]).is_ok());
+    }
+
+    #[test]
+    fn dks_routes_within_travel() {
+        let dks = |r: u8| AdvancedKey::Dks { routes: [15, r, r, 15], keys: vec![] };
+        assert!(dks(34).check_travel(34).is_ok());
+        assert!(dks(35).check_travel(34).is_err());
+        assert!(dks(255).check_travel(34).is_err());
+        assert!(AdvancedKey::Toggle { action: KeyAction::Key(4) }.check_travel(0).is_ok());
+        let l = crate::trigger::TravelLimits { max: 340, min: 8, unit_num: 1, high_precision: false };
+        assert_eq!(max_travel_01mm(&l), 34);
+        assert_eq!(max_travel_01mm(&crate::trigger::TravelLimits { max: 4000, high_precision: true, ..l }), 40);
+        assert_eq!(max_travel_01mm(&crate::trigger::TravelLimits { max: 0, ..l }), 1);
     }
 }

@@ -204,6 +204,27 @@ pub struct DeadBand {
     pub bottom: u8,
 }
 
+impl DeadBand {
+    /// Each value 0..=100, and both together leave some of the full travel.
+    pub fn validate(&self, l: &TravelLimits) -> Result<()> {
+        if self.top > DEAD_BAND_MAX || self.bottom > DEAD_BAND_MAX {
+            return invalid(format!("dead band {}/{} is outside 0..={DEAD_BAND_MAX}", self.top, self.bottom));
+        }
+        if self.top as u16 + self.bottom as u16 >= l.max {
+            return invalid(format!("dead band {}/{} covers the full travel of {}", self.top, self.bottom, l.max));
+        }
+        Ok(())
+    }
+}
+
+/// Checks every key's dead band against the travel limits.
+pub fn validate_dead_band(map: &PerKey<DeadBand>, l: &TravelLimits) -> Result<()> {
+    for (idx, d) in map.iter() {
+        d.validate(l).map_err(|e| crate::Error::Invalid(format!("{}: {e}", key_name(idx))))?;
+    }
+    Ok(())
+}
+
 pub fn decode_dead_band(table: &[u8]) -> Result<PerKey<DeadBand>> {
     if table.len() != DEAD_BAND_TABLE.len {
         return invalid(format!("dead-band table is {} bytes, expected {}", table.len(), DEAD_BAND_TABLE.len));
@@ -474,5 +495,21 @@ mod tests {
         assert_eq!(poll_rate_frame(1).unwrap(), body("21 00 00 00 00 09 01 01"));
         assert!(check_allowed(&poll_rate_frame(8).unwrap()).is_ok());
         assert!(poll_rate_frame(0).is_err() && poll_rate_frame(16).is_err());
+    }
+
+    #[test]
+    fn dead_band_against_travel() {
+        let l = TravelLimits { max: 340, min: 8, unit_num: 1, high_precision: false };
+        assert!(DeadBand { top: 0, bottom: 0 }.validate(&l).is_ok());
+        assert!(DeadBand { top: 100, bottom: 100 }.validate(&l).is_ok());
+        assert!(DeadBand { top: 101, bottom: 0 }.validate(&l).is_err());
+        assert!(DeadBand { top: 0, bottom: 101 }.validate(&l).is_err());
+        let short = TravelLimits { max: 150, ..l };
+        assert!(DeadBand { top: 100, bottom: 49 }.validate(&short).is_ok());
+        assert!(DeadBand { top: 100, bottom: 50 }.validate(&short).is_err(), "covers the full travel");
+        let mut m = PerKey::new();
+        assert!(validate_dead_band(&m, &l).is_ok(), "empty");
+        m.0.insert(46, DeadBand { top: 5, bottom: 200 });
+        assert!(validate_dead_band(&m, &l).unwrap_err().to_string().contains("KeyW"));
     }
 }

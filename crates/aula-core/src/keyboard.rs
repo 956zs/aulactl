@@ -40,7 +40,9 @@ pub struct Keyboard<L: Link = Device> {
     identity: Identity,
     caps: Option<Capabilities>,
     limits: Option<TravelLimits>,
-    backup_dir: Option<PathBuf>,
+    /// Where the automatic backup goes: `Ok(None)` = turned off explicitly (simulator, tests), `Err` = no
+    /// directory could be resolved, so every write is refused.
+    backup_dir: std::result::Result<Option<PathBuf>, String>,
     backed_up: bool,
     last_backup: Option<PathBuf>,
     /// Set after a poll-rate write: the board re-enumerates and this handle is dead.
@@ -54,28 +56,29 @@ impl Keyboard<Device> {
         Self::open(&info)
     }
 
-    /// Opens and identifies the board. Automatic backups go to `store::backups_dir()`.
+    /// Opens and identifies the board. Automatic backups go to `store::backups_dir()`; when that cannot be
+    /// resolved, writes are refused.
     pub fn open(info: &DeviceInfo) -> Result<Self> {
         Self::open_path(&info.node)
     }
 
     pub fn open_path(node: &Path) -> Result<Self> {
         let mut kb = Self::with_link(Device::open(node)?)?;
-        kb.backup_dir = store::backups_dir().ok();
+        kb.backup_dir = store::backups_dir().map(Some).map_err(|e| e.to_string());
         Ok(kb)
     }
 }
 
 impl<L: Link> Keyboard<L> {
     /// Identifies the board behind `link` (`0x0D`, then `0x01` when it is a WIN 60 HE).
-    /// Automatic backups are off; turn them on with `set_auto_backup`.
+    /// Writes are refused until `set_auto_backup` says where the automatic backup goes (or turns it off).
     pub fn with_link(link: L) -> Result<Self> {
         let mut kb = Keyboard {
             link,
             identity: Identity { raw: String::new(), product_code: String::new(), firmware: String::new(), build_date: String::new() },
             caps: None,
             limits: None,
-            backup_dir: None,
+            backup_dir: Err("no automatic backup directory was set".into()),
             backed_up: false,
             last_backup: None,
             gone: false,
@@ -92,7 +95,8 @@ impl<L: Link> Keyboard<L> {
         &self.link
     }
 
-    pub fn link_mut(&mut self) -> &mut L {
+    #[cfg(test)]
+    pub(crate) fn link_mut(&mut self) -> &mut L {
         &mut self.link
     }
 
@@ -120,9 +124,9 @@ impl<L: Link> Keyboard<L> {
         Ok(caps)
     }
 
-    /// Directory for the automatic backup before the first write, or None to turn it off.
+    /// Directory for the automatic backup before the first write, or None to turn it off (simulator, tests).
     pub fn set_auto_backup(&mut self, dir: Option<PathBuf>) {
-        self.backup_dir = dir;
+        self.backup_dir = Ok(dir);
     }
 
     /// The automatic backup this handle wrote, if any.
@@ -243,7 +247,11 @@ impl<L: Link> Keyboard<L> {
         if self.backed_up {
             return Ok(());
         }
-        if let Some(dir) = self.backup_dir.clone() {
+        let dir = match &self.backup_dir {
+            Ok(dir) => dir.clone(),
+            Err(e) => return Err(Error::Refused(format!("no automatic backup is possible ({e}); nothing was written"))),
+        };
+        if let Some(dir) = dir {
             let snap = self.read_snapshot()?;
             let path = store::save_auto_backup(&dir, &snap)?;
             self.last_backup = Some(path);
@@ -344,6 +352,9 @@ impl<L: Link> Keyboard<L> {
         let table = keymap::encode_layer(layer, map)?;
         self.before_write()?;
         self.with_lock(|kb| {
+            if keymap::has_raw(map) {
+                keymap::check_raw_kept(map, &kb.read_keymap(layer)?)?;
+            }
             kb.write_table(CMD_KEYMAP, layer.selector(), keymap::TABLE, &table, ack(CMD_KEYMAP, 0), Duration::ZERO)?;
             let back = kb.read_table(CMD_KEYMAP, keymap::read_selector(layer), keymap::TABLE)?;
             verify_table(&format!("{} layer", layer.name()), &table, &back, 4)
@@ -396,11 +407,20 @@ impl<L: Link> Keyboard<L> {
             .collect()
     }
 
-    /// Writes the given slots and reads all slots back.
+    /// Writes the given slots and reads all slots back. Slots with raw bytes (`AdvancedKey::has_raw`) must
+    /// be what the board already holds.
     pub fn write_advanced(&mut self, slots: &[(u8, AdvancedKey)]) -> Result<()> {
         let frames = slots.iter().map(|(s, a)| advanced::write_frame(*s, a)).collect::<Result<Vec<_>>>()?;
+        let max = advanced::max_travel_01mm(&self.travel_limits()?);
+        for (s, a) in slots {
+            a.check_travel(max).map_err(|e| Error::Invalid(format!("advanced-key slot {s}: {e}")))?;
+        }
         self.before_write()?;
         self.with_lock(|kb| {
+            if slots.iter().any(|(_, a)| a.has_raw()) {
+                let current = kb.read_advanced()?;
+                advanced::check_raw_kept(slots, &current)?;
+            }
             for f in &frames {
                 kb.exchange(f, ack(CMD_ADVANCED, 0), 1)?;
             }
@@ -527,6 +547,7 @@ impl<L: Link> Keyboard<L> {
     pub fn write_dead_band(&mut self, map: &PerKey<DeadBand>) -> Result<()> {
         self.require("dead band", Capabilities::dead_band)?;
         let table = trigger::encode_dead_band(map)?;
+        trigger::validate_dead_band(map, &self.travel_limits()?)?;
         self.before_write()?;
         self.with_lock(|kb| {
             kb.write_table(CMD_DEAD_BAND, 1, trigger::DEAD_BAND_TABLE, &table, ack(CMD_DEAD_BAND, 1), Duration::ZERO)?;
@@ -671,10 +692,10 @@ impl<L: Link> Keyboard<L> {
 
     /// Starts any-key calibration: press every key to calibrate fully down and release it, then `stop`.
     /// Calibration is stopped when the returned guard is dropped. Holds the device lock until then.
-    pub fn calibrate(&mut self, _confirm: Confirm) -> Result<Calibration<'_, L>> {
+    pub fn calibrate(&mut self, confirm: Confirm) -> Result<Calibration<'_, L>> {
         self.require("any-key calibration", Capabilities::any_key_calibration)?;
         self.before_write()?;
-        let start = travel::calibration_start_frame();
+        let start = travel::calibration_start_frame(confirm);
         self.check(&start)?;
         self.link.lock()?;
         if let Err(e) = self.link.drain().and_then(|_| self.link.send(&start)) {
