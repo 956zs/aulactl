@@ -134,11 +134,7 @@ fn main() -> ExitCode {
     worker::shutdown(SHUTDOWN_WAIT);
     if opts.sim {
         // The simulator's profiles and backups only live for this run.
-        if let Ok(dirs) = files::Dirs::for_run(true) {
-            if let Some(base) = dirs.backups.parent() {
-                let _ = std::fs::remove_dir_all(base);
-            }
-        }
+        files::remove_sim_dir();
     }
     match code {
         0 => ExitCode::SUCCESS,

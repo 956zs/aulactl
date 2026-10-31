@@ -3,7 +3,9 @@
 
 use aula_core::store;
 use serde_json::{json, Value};
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 const MANUAL_PREFIX: &str = "manual-";
 const AUTO_PREFIX: &str = "auto-";
@@ -16,13 +18,43 @@ pub struct Dirs {
     pub profiles: PathBuf,
 }
 
+/// The `--sim` scratch directory, created once per process (removed again by `remove_sim_dir`).
+static SIM_DIR: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+
 impl Dirs {
     pub fn for_run(sim: bool) -> Result<Dirs, String> {
         if sim {
-            let base = std::env::temp_dir().join(format!("aula-gui-sim-{}", std::process::id()));
+            let base = SIM_DIR
+                .get_or_init(|| {
+                    let base = sim_base(std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from));
+                    create_scratch(&base).map(|_| base)
+                })
+                .clone()?;
             return Ok(Dirs { backups: base.join("backups"), profiles: base.join("profiles") });
         }
         Ok(Dirs { backups: store::backups_dir()?, profiles: store::profiles_dir()? })
+    }
+}
+
+/// `$XDG_RUNTIME_DIR/aula-gui-sim-<pid>` (owner-only by the XDG spec), else the same under the temp dir.
+fn sim_base(runtime: Option<PathBuf>) -> PathBuf {
+    let parent = runtime.filter(|p| p.is_absolute()).unwrap_or_else(std::env::temp_dir);
+    parent.join(format!("aula-gui-sim-{}", std::process::id()))
+}
+
+/// Creates a fresh owner-only (0700) directory. An existing one (someone else's, or a symlink planted in a
+/// shared temp dir) is refused rather than used.
+fn create_scratch(dir: &Path) -> Result<(), String> {
+    std::fs::DirBuilder::new().mode(0o700).create(dir).map_err(|e| match e.kind() {
+        std::io::ErrorKind::AlreadyExists => format!("{} already exists; refusing to use it", dir.display()),
+        _ => format!("{}: {e}", dir.display()),
+    })
+}
+
+/// Deletes the `--sim` scratch directory, if this process created it.
+pub fn remove_sim_dir() {
+    if let Some(Ok(dir)) = SIM_DIR.get() {
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
 
@@ -135,9 +167,34 @@ mod tests {
     }
 
     #[test]
-    fn sim_dirs_are_scratch() {
+    fn sim_dirs_are_private_scratch() {
+        use std::os::unix::fs::PermissionsExt;
         let d = Dirs::for_run(true).unwrap();
-        assert!(d.backups.starts_with(std::env::temp_dir()));
+        let base = d.backups.parent().unwrap().to_path_buf();
+        assert_eq!(d.profiles.parent(), Some(base.as_path()));
         assert_ne!(d.backups, d.profiles);
+        assert_eq!(std::fs::metadata(&base).unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(Dirs::for_run(true).unwrap(), d, "created once per process");
+    }
+
+    #[test]
+    fn sim_base_prefers_the_runtime_dir() {
+        let pid = std::process::id();
+        assert_eq!(sim_base(Some("/run/user/1000".into())), PathBuf::from(format!("/run/user/1000/aula-gui-sim-{pid}")));
+        assert!(sim_base(Some("relative".into())).starts_with(std::env::temp_dir()));
+        assert!(sim_base(None).starts_with(std::env::temp_dir()));
+    }
+
+    #[test]
+    fn scratch_refuses_existing_paths() {
+        let d = scratch("exist");
+        assert!(create_scratch(&d).unwrap_err().contains("refusing"));
+        let link = d.join("link");
+        std::os::unix::fs::symlink("/", &link).unwrap();
+        assert!(create_scratch(&link).is_err(), "a planted symlink is not followed");
+        assert!(create_scratch(&d.join("missing/deeper")).is_err());
+        let fresh = d.join("fresh");
+        create_scratch(&fresh).unwrap();
+        std::fs::remove_dir_all(&d).unwrap();
     }
 }

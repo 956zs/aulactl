@@ -226,6 +226,8 @@ fn is_link_error(e: &Error) -> bool {
 }
 
 /// Whether two snapshots hold the same settings (the read time aside).
+const CHANGED_ELSEWHERE: &str = "the keyboard's settings changed since they were read (another program?); nothing was written and the pages now show the current values";
+
 pub fn same_settings(a: &Snapshot, b: &Snapshot) -> bool {
     let mut b = b.clone();
     b.created_unix = a.created_unix;
@@ -296,13 +298,17 @@ impl<P: FnMut(Event) -> bool> Worker<P> {
 
     fn open_keyboard(&self) -> Result<(Keyboard<GuiLink>, Option<PathBuf>), Error> {
         if let Some(board) = &self.sim {
-            let kb = Keyboard::with_link(GuiLink::Sim(SimLink::new(board.clone())))?;
+            let mut kb = Keyboard::with_link(GuiLink::Sim(SimLink::new(board.clone())))?;
+            kb.set_auto_backup(None);
             return Ok((kb, None));
         }
         let info = hidraw::find_devices().into_iter().next().ok_or(Error::NotFound)?;
         let mut kb = Keyboard::with_link(GuiLink::Hid(Device::open(&info.node)?))?;
-        // Before the first write of this handle the whole configuration is saved here.
-        kb.set_auto_backup(self.dirs.as_ref().ok().map(|d| d.backups.clone()));
+        // Before the first write of this handle the whole configuration is saved here. Without a backup
+        // directory the core refuses every write.
+        if let Ok(d) = &self.dirs {
+            kb.set_auto_backup(Some(d.backups.clone()));
+        }
         Ok((kb, Some(info.node)))
     }
 
@@ -416,17 +422,28 @@ impl<P: FnMut(Event) -> bool> Worker<P> {
         let fresh = self.supported_kb()?.read_snapshot().map_err(String::from)?;
         if !same_settings(&shown, &fresh) {
             let _ = self.reload();
-            return Err("the keyboard's settings changed since they were read (another program?); nothing was written and the pages now show the current values".into());
+            return Err(CHANGED_ELSEWHERE.into());
         }
         Ok(fresh)
     }
 
-    /// Writes the tables where `new` differs from the board, then reads everything back.
+    /// Writes the tables where `new` differs from the board, then reads everything back. The check that the
+    /// board still holds what the pages show and the write happen under one device lock.
     fn write_snapshot(&mut self, new: &Snapshot) -> Result<(), String> {
-        let old = self.fresh_snapshot()?;
-        let result = self.supported_kb()?.apply_snapshot(new, &old);
+        let shown = self.state.snapshot.clone().ok_or(NOT_LOADED)?;
+        let result = self.supported_kb()?.with_lock(|kb| {
+            let fresh = kb.read_snapshot()?;
+            if !same_settings(&shown, &fresh) {
+                return Ok(None);
+            }
+            kb.apply_snapshot(new, &fresh).map(Some)
+        });
         let report = match result {
-            Ok(r) => r,
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                let _ = self.reload();
+                return Err(CHANGED_ELSEWHERE.into());
+            }
             Err(e) => {
                 // Part may have been written: show what the board holds now.
                 let _ = self.reload();
@@ -529,8 +546,9 @@ impl<P: FnMut(Event) -> bool> Worker<P> {
     fn backup_now(&mut self) -> Result<(), String> {
         let snap = self.fresh_snapshot()?;
         let dir = self.dirs.as_ref().map_err(Clone::clone)?.backups.clone();
+        store::private_dir(&dir)?;
         let path = files::manual_backup_path(&dir, snap.created_unix);
-        store::save_snapshot(&path, &snap)?;
+        store::save_snapshot_new(&path, &snap)?;
         self.list_backups();
         self.emit(Event::Notice("notice.backup_saved", path.display().to_string()));
         Ok(())
@@ -736,6 +754,30 @@ mod tests {
             _ => None,
         });
         assert!(e.contains("JSON"), "{e}");
+        tx.send(Command::Quit).unwrap();
+        h.join().unwrap();
+    }
+
+    #[test]
+    fn sim_refuses_raw_entries_the_board_does_not_hold() {
+        let (tx, rx, h) = spawn_sim();
+        let s = loaded(&rx);
+        let mut snap = s.snapshot.clone().unwrap();
+        snap.keymap.base.0.insert(66, aula_core::keymap::KeyAction::Raw([0x99, 0, 0, 0]));
+        tx.send(Command::Apply(snap.to_json().unwrap())).unwrap();
+        let e = wait_for(&rx, |e| match e {
+            Event::Error(m) => Some(m),
+            _ => None,
+        });
+        assert!(e.contains(aula_core::keymap::RAW_NOT_KEPT), "{e}");
+        let mut snap = s.snapshot.unwrap();
+        snap.advanced[0] = aula_core::advanced::AdvancedKey::Other { payload: "05".repeat(40) };
+        tx.send(Command::Apply(snap.to_json().unwrap())).unwrap();
+        let e = wait_for(&rx, |e| match e {
+            Event::Error(m) => Some(m),
+            _ => None,
+        });
+        assert!(e.contains(aula_core::keymap::RAW_NOT_KEPT), "{e}");
         tx.send(Command::Quit).unwrap();
         h.join().unwrap();
     }
