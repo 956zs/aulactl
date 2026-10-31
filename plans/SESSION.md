@@ -104,3 +104,6 @@ Real board: only read commands and `travel` were run (no write sent).
 
 ## Review fixes ✅
 - Correctness review P2-1..P3-6 + test dir cleanup fixed (ca80ddb core, cc1ab90 cli, db699cd sim knob, 9b8a7cd gui); see plans/ISSUES.md. Tests 150/60/101, clippy clean, reinstalled; real board READ-only smoke OK.
+- ✅ Phase C: security review (fixed, ISSUES.md), correctness review (fixed), Codex skipped by owner; README/LICENSE; pushed private 956zs/aulactl (2026-11-01)
+- Real-device writes verified so far: actuation (one key change+revert), lighting brightness. Not yet on hardware: keymap/macro/SOCD/adv/custom RGB writes, calibration, resets (JS-only), GUI Apply.
+- Owner baseline backup: ~/aula-re/backup-pre-write-2026-11-01.json
