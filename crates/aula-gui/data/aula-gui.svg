@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <!-- aula-gui app icon: a 60 % keyboard with one key pressed half-way, original artwork. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3b3a4f"/>
+      <stop offset="1" stop-color="#23222f"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#bg)"/>
+  <rect x="18" y="38" width="92" height="52" rx="8" fill="none" stroke="#e6e1f5" stroke-width="5"/>
+  <g fill="#e6e1f5">
+    <rect x="27" y="47" width="10" height="9" rx="2"/>
+    <rect x="41" y="47" width="10" height="9" rx="2"/>
+    <rect x="55" y="47" width="10" height="9" rx="2"/>
+    <rect x="69" y="47" width="10" height="9" rx="2"/>
+    <rect x="83" y="47" width="18" height="9" rx="2"/>
+    <rect x="27" y="60" width="16" height="9" rx="2"/>
+    <rect x="61" y="60" width="10" height="9" rx="2"/>
+    <rect x="75" y="60" width="10" height="9" rx="2"/>
+    <rect x="89" y="60" width="12" height="9" rx="2"/>
+    <rect x="27" y="73" width="10" height="8" rx="2"/>
+    <rect x="41" y="73" width="46" height="8" rx="2"/>
+    <rect x="91" y="73" width="10" height="8" rx="2"/>
+  </g>
+  <rect x="47" y="60" width="10" height="9" rx="2" fill="#c9b8ff"/>
+  <path d="M52 22 v10 m-5 -5 l5 5 l5 -5" fill="none" stroke="#c9b8ff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

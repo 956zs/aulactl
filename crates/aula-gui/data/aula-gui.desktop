@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=AULA WIN 60 HE
+GenericName=Keyboard Settings
+GenericName[zh_TW]=鍵盤設定
+Comment=Configure the AULA WIN 60 HE magnetic-switch keyboard
+Comment[zh_TW]=設定 AULA WIN 60 HE 磁軸鍵盤
+Exec=env "QT_QPA_PLATFORM=wayland;xcb" aula-gui
+Icon=aula-gui
+Terminal=false
+Categories=Settings;HardwareSettings;
+Keywords=keyboard;rapid trigger;actuation;RGB;macro;AULA;
+StartupWMClass=aula-gui
