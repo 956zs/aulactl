@@ -19,3 +19,21 @@
 | P3-10 | `Keyboard::calibrate` ignored its `Confirm` | fixed: `calibration_start_frame(Confirm)` needs the token | ce3dc0a |
 
 Tests after the fixes: aula-core 142, aulactl 57, aula-gui 96; clippy -D warnings clean.
+
+## Correctness review 2026-11-01
+
+| id | finding | status | commit |
+|---|---|---|---|
+| P2-1 | CLI calibrate dropped an early Finished/Failed and then failed on stop()'s empty result | fixed: early final status wins over stop()'s | cc1ab90 |
+| P2-2 | custom slots written 0 then 1, so the last-written (shown) slot could switch | fixed: other slot first, active slot last (rewritten even if unchanged), `09 20` verified; CLI `light custom set --slot N` keeps the shown slot (`write_custom_colors_keep_active`) and says so | ca80ddb, cc1ab90 |
+| P2-3 | apply validated every trigger key, so bad values already on the board blocked unrelated applies | fixed: only `changed_keys` validated | ca80ddb |
+| P2-4 | stopLive only sent when `Device.live` was already true | fixed: page leave / nav change / window close always send it (stopCalibration on close too) | 9b8a7cd |
+| P3-1 | snapshot used cached capabilities (stale win-lock) | fixed: `refresh_capabilities` in read | ca80ddb |
+| P3-2 | GUI kept a dead handle after an I/O error (same hidrawN re-enumeration) | fixed: GuiLink records I/O errors, command() disconnects so the poll reopens | db699cd, 9b8a7cd |
+| P3-3 | GUI reconnect did not update `state.node` | fixed | 9b8a7cd |
+| P3-4 | an echo/ACK of the calibration start could read as Finished | fixed: `b[4] < 2` ignored, exact start-frame echo ignored for 100 ms; protocol.md open question 9 (re-check on first real calibration) | ca80ddb |
+| P3-5 | DKS decode dropped Default gaps (positions shifted on rewrite) | fixed: gaps and phases kept, only all-zero trailing positions dropped; non-zero bytes past the keys keep the slot raw | ca80ddb |
+| P3-6 | CLI: `--bind` validated after the slot write; pollrate reconnect ignored `--device`; Ctrl-C during the lock wait still started travel/calibration | fixed: keymap plan checked before the slot write; reconnect follows the same board (USB port path, else node); `hidraw::set_lock_abort` from the signal handler aborts the wait before anything is sent | ca80ddb, cc1ab90 |
+| — | GUI worker tests left `$XDG_RUNTIME_DIR/aula-gui-sim-<pid>` | fixed: per-test scratch dirs removed on drop; sim-dir test removes the process dir | 9b8a7cd |
+
+Tests after the fixes: aula-core 150, aulactl 60, aula-gui 101; clippy -D warnings clean; reinstalled; real board READ-only smoke (info, dump, diff vs pre-write backup) OK.

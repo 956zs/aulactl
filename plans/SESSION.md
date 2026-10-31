@@ -101,3 +101,6 @@ Real board: only read commands and `travel` were run (no write sent).
 - Review findings P2-2..P3-10 fixed (1472c03, ce3dc0a, 8c7c66a, 23cf7c9): raw entries preserve-only, full validation before
   the first write, mandatory auto-backup, locked restore/apply, 0700/0600 + no-clobber files, bounded drain / 4 MiB snapshots,
   private --sim dir, Confirm-gated calibration. See plans/ISSUES.md. Tests 142/57/96, clippy clean, reinstalled; real board READ-only smoke OK.
+
+## Review fixes ✅
+- Correctness review P2-1..P3-6 + test dir cleanup fixed (ca80ddb core, cc1ab90 cli, db699cd sim knob, 9b8a7cd gui); see plans/ISSUES.md. Tests 150/60/101, clippy clean, reinstalled; real board READ-only smoke OK.
