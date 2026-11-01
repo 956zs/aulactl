@@ -140,3 +140,19 @@ Real board: only read commands and `travel` were run (no write sent).
 - aula_keys module flags: `aulactl feed --keys ... --depth-hz ... --record --label "<beatmap>"`.
 - Limitations: one offset per play (a pause inside the play breaks alignment after it); taiko/catch refused;
   custom lazer rates (not DT/HT) not known from the legacy format.
+
+## Key overlay video (`aulactl replay overlay`) + osu-render step ✅ (2026-11-01)
+- Contract: docs/feed.md "Key overlay video" (CLI, `--json-only` schema, raw `--out -`, exit 3 = no session) and
+  "danser video time → song time" (formula + empirical check).
+- Core `overlay`: `Data` (presses/peaks/depth on the song clock, serde, schema 1), `build`, `session_candidates`
+  (4 newest sessions started ≤ replay ts + 1 min), `find_session` (first that aligns).
+- CLI `crates/aulactl/src/overlay/`: `draw` (pure `render(scene, style, font, t, pixmap)`: keycaps with travel fill,
+  actuation line, counts, KPS / peak KPS / 1/4 BPM, KeyOverlay bars scaled by peak depth, fade at the top), `font`
+  (fontdue via fc-match, built-in 5×7 pixel font fallback = tests), `mod` (args, `Timing` with pre-roll, ffmpeg
+  qtrle/vp9/ffv1 or raw RGBA stdout). Deps: tiny-skia 0.12 (no png), fontdue 0.9.
+- Example `aula-core/examples/synth_session.rs`: synthetic session from a real .osr (testing without a recording).
+- danser's bundled ffmpeg has no qtrle/ffv1/libvpx: osu-render pipes `--out -` raw frames into danser's ffmpeg.
+- osu-render PR (branch feat/keyboard-overlay): `src/key-overlay.ts` (timeline from danser settings, composite,
+  encoder fallback to libx264), options keyOverlay/Corner/Scale/Opacity, `/health keyOverlay`, UI + i18n, README x3.
+  E2E on a test instance (port 3031, synthetic sessions): nomod quickstart, HDDT, full intro all within 0..1 frame of
+  danser's own key overlay. Live service not touched.

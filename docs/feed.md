@@ -97,6 +97,64 @@ aulactl replay report [SESSION|latest] [--osr FILE] [--exports DIR] [--open]
   and a zoomable timeline of each key's depth with the replay's key-down spans and the actuation point.
   Labels are in Traditional Chinese.
 
+### Key overlay video (`aulactl replay overlay`)
+
+```sh
+aulactl replay overlay [SESSION|latest|auto] --osr FILE --out FILE.mov|.webm|.mkv|- [--width W] [--height H]
+        [--fps N] [--start-ms S] [--duration-ms D] [--preroll-ms P] [--bar-speed PX] [--font FILE]
+        [--ffmpeg BIN] [--json-only]
+```
+
+A transparent video in the style of the osu! "KeyOverlay" streamer tool, drawn from the recorded session that played
+the replay: per replay input (K1/K2, mania columns) the recorded key as a keycap with its live travel (filled from
+the top), the actuation point (line) and its press count; a stats line with KPS (presses in the last real second),
+the highest KPS so far and the tapping BPM (`15000 / median interval` of the last ≤ 9 presses of all keys within
+2 s, i.e. 1/4-note BPM; `-` with fewer than 4); and a bar per press that rises from its key (length = hold time,
+scrolling up at a constant speed, fading out in the top third), wider and brighter the deeper the press went.
+
+- `auto` (default) finds the session itself: the newest of the 4 sessions started before the replay's timestamp
+  (+1 min) that aligns (same rules as `replay report`). None → exit code **3** ("no recorded session lines up with
+  this replay"), any other error → 1. `SESSION` / `latest` name one.
+- Time: frame `n` shows song time (ms, the replay's own clock, as in `.osr` frames) `S + n·1000/N` for the first
+  `P` ms of video, then advances at the song rate (1.5 with DT/NC, 0.75 with HT): `S + P + (t − P)·rate`. Default
+  `S` = 1 s before the first replay frame, default `D` up to 1 s after the last; `P` 0.
+- Output: `.mov` QuickTime Animation (argb), `.webm` VP9 with alpha, `.mkv` FFV1 (bgra), each encoded by `--ffmpeg`
+  (default `ffmpeg` on PATH); `-` writes the raw frames to stdout instead (RGBA, straight alpha, W×H, row-major,
+  N frames per second, nothing else), for a consumer that feeds them to its own ffmpeg
+  (`-f rawvideo -pix_fmt rgba -s WxH -r N -i pipe:0`); the summary then goes to stderr.
+- Default size 360×640 at 60 fps. Text uses a bold sans font from fontconfig (`--font` picks one) or a built-in
+  pixel font when none loads.
+- `--json-only` writes the aligned data instead (stdout, or `--out FILE`): `{"schema":1, "session_file",
+  "replay_file", "rate", "offset_ms"` (session ms of song 0), `"matched", "replay_downs", "match_rate",
+  "residual_median_ms", "max_mm", "replay_range": [first, last], "keys": [{"code", "label", "input", "mode",
+  "point", "presses": [{"down", "up", "peak"}], "depth": [[t, mm], ...]}]}`, all times in song ms. Presses are
+  every recorded press of the mapped keys (also ones the game did not count), `up` null when the recording ended
+  while held; depth samples cover the replay ± 10 s.
+
+#### danser video time → song time (osu-render)
+
+osu-render renders with danser-go 0.12 (`-quickstart` when "skip intro" is on) and lays the overlay over danser's
+video from frame 0, so it passes `S`, `P` and `D` for that video. From danser-go `app/states/player.go` and
+`app/app.go` (record mode):
+
+- Record mode forces `Playfield.LeadInTime` 0; `-quickstart` sets `SKIP` and also `LeadInHold` 0.
+- `preempt = min(1800, floor(DifficultyRate(AR, 1800, 1200, 450)))`, AR from the map (OD when it has none), ×1.4
+  (max 10) with HR, ÷2 with EZ, rounded through float32 like danser. Rate mods do not change it.
+- `startPointE = firstObject − preempt` when skipping and that is > 0, else `−preempt`. The clock starts at
+  `startPointE − LeadInHold − seizure warning (max(1 s, Duration) when enabled) − max(LeadInTime, 1 s)`.
+- The clock advances in 1 ms steps at speed 1 until song time reaches `startPointE`, then at the mod rate; frame 0
+  is captured after the first step. Song time = clock − 24 ms for maps older than format v5 (and minus the local /
+  online beatmap offsets, 0 for osu-render).
+- So `S = clockStart + 1 − oldOffset`, `P = startPointE + oldOffset − (clockStart + 1)`; with quickstart `P` is
+  999 ms. `D` = the video's length (ffprobe).
+
+Checked on real renders (720p, h264_qsv): the frame where danser's own K1 key-overlay box starts its press
+colour change was the predicted frame or the next one for 158 of 162 detected colour changes (no mods,
+quickstart), 134 of 139 (HDDT, quickstart: pre-roll at speed 1, then ×1.5) and 185 of 192 (no mods, full intro,
+LeadInHold 2 s); the few others sat next to a different press (fast streams, where the box does not return to its
+rest colour). danser's 100 ms colour tween needs a few ms to show, hence "or the next one"; shifting `S` by 8 ms
+already moves presses to 2 frames late.
+
 ## Does the feed slow down key reports? (`scripts/latency-check.sh`)
 
 Whether the board's normal key reports change while the travel test is open is not known (protocol 10.1).

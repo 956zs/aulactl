@@ -35,6 +35,9 @@ code it reports and refuses to write to anything else.
   aligns it with the replay osu!lazer exports and writes an HTML report (depth at each press, peak depth,
   bottom-out ratio, hold time, rapid-trigger re-presses, shallow presses, zoomable timeline); also from the GUI's
   Live page. See [docs/feed.md](docs/feed.md#recording-sessions---record)
+- Key overlay video: `aulactl replay overlay` draws the recorded keys of a replay (live travel, presses, KPS /
+  BPM, KeyOverlay-style bars) as a transparent video on the replay's clock, e.g. for osu-render to lay over its
+  danser render. See [docs/feed.md](docs/feed.md#key-overlay-video-aulactl-replay-overlay)
 - Backup / restore / diff, host-side named profiles
 
 ## Install
