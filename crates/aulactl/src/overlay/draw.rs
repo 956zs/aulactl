@@ -42,7 +42,7 @@ pub struct Style {
 /// Overlay data with the lookups the frames need (sorted press times, running peak KPS).
 pub struct Scene {
     pub data: Data,
-    /// Every key's press times (song ms), sorted.
+    /// Every key's press times (song ms) from the start of the play on, sorted.
     downs: Vec<f64>,
     /// KPS reached at each of `downs`, running maximum.
     peak_kps: Vec<u32>,
@@ -62,7 +62,7 @@ impl Scene {
             .keys
             .iter()
             .flat_map(|k| k.presses.iter().map(|p| p.down))
-            .filter(|t| t.is_finite())
+            .filter(|t| t.is_finite() && *t >= data.replay_range.0)
             .collect();
         downs.sort_by(f64::total_cmp);
         let window = KPS_WINDOW_MS * data.rate;
@@ -139,12 +139,14 @@ impl Scene {
             .map_or(0.0, |key| depth_at(&key.depth, t))
     }
 
-    /// Presses of key `k` up to song time `t`.
+    /// Presses of key `k` from the start of the play (the first replay frame) up to song time `t`; taps
+    /// before it (menus, retries) do not count, like the game's key counter.
     pub fn count(&self, k: usize, t: f64) -> usize {
-        self.data
-            .keys
-            .get(k)
-            .map_or(0, |key| key.presses.partition_point(|p| p.down <= t))
+        let start = self.data.replay_range.0;
+        self.data.keys.get(k).map_or(0, |key| {
+            let hi = key.presses.partition_point(|p| p.down <= t);
+            hi.saturating_sub(key.presses.partition_point(|p| p.down < start))
+        })
     }
 
     /// Whether key `k` is held at song time `t`.
@@ -577,6 +579,23 @@ mod tests {
         assert_eq!(s.depth(0, 1010.0), 3.4);
         assert_eq!(s.depth(0, 1100.0), 0.0);
         assert_eq!(s.depth(7, 1100.0), 0.0, "no such key");
+    }
+
+    #[test]
+    fn taps_before_the_play_are_not_counted() {
+        // the play starts at song 0 (first replay frame); taps in the menu before it only draw
+        let early: Vec<Press> = (0..6)
+            .map(|i| press(-900.0 + i as f64 * 100.0, -880.0 + i as f64 * 100.0, 2.0))
+            .collect();
+        let mut z = early.clone();
+        z.push(press(500.0, 540.0, 3.0));
+        let s = Scene::new(data(vec![key("KeyZ", z)], 1.0)).unwrap();
+        assert_eq!(s.count(0, -100.0), 0);
+        assert_eq!(s.count(0, 1000.0), 1);
+        assert_eq!(
+            (s.kps(100.0), s.peak_kps(1000.0), s.bpm(100.0)),
+            (0, 1, None)
+        );
     }
 
     #[test]
