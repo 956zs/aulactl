@@ -18,6 +18,7 @@ pub mod layout;
 pub mod lighting;
 pub mod macros;
 pub mod osr;
+pub mod overlay;
 pub mod perkey;
 pub mod replay;
 pub mod report;
