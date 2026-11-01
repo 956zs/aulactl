@@ -76,6 +76,7 @@ The `aula_keys` module enables it with `--record --label "<beatmap from osu-stat
 
 ```sh
 aulactl replay sessions [--limit N]                    # newest sessions: start, length, presses, keys, label
+                                                       # [recording…] = a feed still writes it, [cut off] = recorder died
 aulactl replay match [--exports DIR] [--limit N]       # exported .osr files that belong to each session
 aulactl replay report [SESSION|latest] [--osr FILE] [--exports DIR] [--open]
 ```
@@ -91,7 +92,10 @@ aulactl replay report [SESSION|latest] [--osr FILE] [--exports DIR] [--open]
   played which input. Refused (with the numbers) when fewer than 60 % of the replay's key-downs match —
   wrong session, keys not recorded (e.g. mouse buttons), or a pause in the play.
 - The report is one self-contained HTML file in `$XDG_DATA_HOME/aulactl/reports/` (no network): alignment
-  quality, per key the depth when the replay registered each press (p10/median/p90), peak depth, bottom-out
+  quality, per key the depth when the replay registered each press (p10/median/p90; the travel stream
+  trails the HID report by a few ms, so when the last sample at that instant is still above the actuation
+  point the first sample within 8 ms after it that reaches the point is used), peak depth (press span + 8 ms),
+  presses without any travel sample as "no data" (left out of the depth figures), bottom-out
   ratio (peak ≥ max − 0.1 mm), hold time, rapid-trigger re-presses (the key did not rise above the
   actuation point since the previous release), shallow presses (peak < point + 0.5 mm, listed with links),
   and a zoomable timeline of each key's depth with the replay's key-down spans and the actuation point.
