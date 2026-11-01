@@ -5,6 +5,7 @@
 //! identifies as a WIN 60 HE.
 
 pub mod advanced;
+pub mod align;
 pub mod error;
 pub mod feed;
 pub mod frame;
@@ -16,9 +17,13 @@ pub mod keymap;
 pub mod layout;
 pub mod lighting;
 pub mod macros;
+pub mod osr;
 pub mod perkey;
+pub mod replay;
+pub mod report;
 #[cfg(any(test, feature = "sim"))]
 pub mod sim;
+pub mod session;
 pub mod snapshot;
 pub mod socd;
 pub mod store;

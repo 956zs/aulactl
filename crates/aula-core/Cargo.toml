@@ -13,6 +13,8 @@ sim = []
 libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+flate2.workspace = true
+lzma-rs.workspace = true
 
 [[example]]
 name = "usbmon_latency"
