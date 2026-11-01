@@ -45,3 +45,37 @@ ii matugen colours; i18n en + zh_TW; `scripts/install.sh` user-local install).
 - `CARGO_TARGET_DIR=~/.cache/build-targets/aulactl` (GUI agent may use `aulactl-gui`), never repo `target/`.
 - Run builds with `nice -n 19 ionice -c3`. Before heavy builds check `hyprctl activewindow -j` — if class is `osu!` (owner playing), wait.
 - Commits: conventional format, no AI attribution.
+
+## Replay link (feed recording + osu! replay alignment) — design 2026-11-01
+
+Scope (owner-confirmed): record + align + report. All Rust (no scripts in other languages).
+
+- **Recording** (`aulactl feed --record [DIR] [--label TEXT]`): stdout unchanged. The session file
+  `<dir>/<UTC YYYYmmdd-HHMMSS>-<sanitized label>.ndjson.gz` (default dir `$XDG_DATA_HOME/aulactl/sessions`, 0700;
+  file 0600, created new, never replaced) is opened at the first `hello`. Line 1 = `{"type":"session","schema":1,
+  "label","start_unix_ms","start_mono_ms","product","firmware","max_mm","keys":[hello keys]}`; then lines shaped like the
+  feed's: `hello` (each reconnect), every raw travel sample as `depth` (t 0.01 ms, mm 3 decimals, not coalesced),
+  `press`/`release`, `status` lost. `t` = ms since the feed started (same clock as stdout). gzip via `flate2`
+  (miniz_oxide, pure Rust), sync-flushed every 2 s; finished on SIGINT/SIGTERM/EPIPE/fatal error; a record write error
+  stops recording (stderr once), never the feed. Readers accept a truncated file (SIGKILL). Retention after each new
+  file: newest 300 sessions and at most 2 GiB in total (constants in `aula_core::session`). Label: control chars
+  removed, ≤ 200 chars in the header; file-name part = alphanumerics and `-_.()[]`, spaces → `_`, no leading dot,
+  ≤ 80 chars.
+- **core `osr`**: legacy replay header (strings ULEB128, caps) + LZMA frames via `lzma-rs` (pure Rust, memlimit).
+  Frames `w|x|y|z` with cumulative w, seed frame -12345 skipped, lazer trailing data ignored. Inputs: standard
+  bit0 (M1/K1) = input 1, bit1 (M2/K2) = input 2; mania x = column bitmask. Other modes: refused. Rate mods DT/NC
+  ×1.5, HT ×0.75 (song time → real time). Test encoder in tests (lzma-rs compress).
+- **core `align`** (pure): presses per recorded key vs replay key-downs per input. Offset search: votes over
+  (session press − replay down) differences in 1 ms bins (replay anchors capped to 400, spread), limited to the
+  wall-clock window when the osr timestamp is known; the top bins are rescored by greedy nearest matching within
+  ±6 ms per (input, key) and the offset refined to the median residual; mapping = best injective assignment of
+  inputs to keys (brute force ≤ 3 inputs, greedy beyond). Result: offset, mapping, match rate, residual
+  median/p95 (abs), unmatched counts; refused below 60 % match rate or < 10 matches.
+- **core `report`**: per-key stats (presses, depth at the replay's key-down p10/median/p90, peak per press,
+  bottom-out ratio ≥ max−0.1 mm, hold, RT re-presses without returning above the point, shallow presses = peak <
+  point + 0.5 mm) and a self-contained HTML (inline CSS/JS, data as embedded JSON with `</` escaped, canvas
+  timeline with wheel zoom / drag scroll, zh_TW labels, dark theme). Written to `$XDG_DATA_HOME/aulactl/reports/`.
+- **CLI `aulactl replay`**: `sessions`, `match [--exports DIR]`, `report [SESSION|latest] [--osr FILE]
+  [--exports DIR] [--open]`. Pairing: osr file name `<player> playing <map> (<date>).osr` → normalized map name vs
+  session label (alphanumeric, lowercase), and osr timestamp within [session start − 1 min, session end + 5 min].
+- **GUI**: Live page "Sessions" list (newest 10) with a Report button → core report + xdg-open; follow-up if it grows.

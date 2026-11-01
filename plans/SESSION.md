@@ -124,3 +124,19 @@ Real board: only read commands and `travel` were run (no write sent).
   measurement needs the owner typing.
 - Tests 174 core / 7 example / 69 cli / 101 gui, clippy clean, reinstalled. Real board: feed KeyZ,KeyX 5 s (open/close
   ACKed), busy -> hello once `travel` finished, `info` OK after.
+
+## Replay link (feed --record + osu! replays) ✅ (2026-11-01)
+- Design: plans/PLAN.md "Replay link". Contract: docs/feed.md "Recording sessions" + "Replay reports" (stdout unchanged).
+- Core: `session` (gzip NDJSON writer/reader, truncated-file tolerant, retention 300 / 2 GiB, label rules,
+  `resolve`), `osr` (legacy .osr parser, lzma-rs, caps, spans per input, `encode` test helpers under test/sim),
+  `align` (offset voting + greedy matching ±6 ms, best injective input→key mapping, refuses < 60 % / < 10),
+  `report` (per-key stats + self-contained HTML `report.html`, zh_TW), `replay` (exports scan, pairing by map
+  name + timestamp window, `make_report`, `open` via xdg-open). Deps: flate2 (miniz_oxide), lzma-rs.
+- CLI: `feed --record [DIR] [--label TEXT]` (`Recorder`: file at first hello, flush at unplug, finish on exit,
+  write errors stop recording only); `replay sessions|match|report` (offline, no keyboard).
+- GUI: `Sessions` singleton (bridge/sessions.rs) + Live page card: newest 10 sessions, Report button (thread,
+  opens the HTML). i18n en + zh_TW.
+- lazer .osr timestamp = end of play (checked on a real export: ~0.3 s before osu-state's cooldown start).
+- aula_keys module flags: `aulactl feed --keys ... --depth-hz ... --record --label "<beatmap>"`.
+- Limitations: one offset per play (a pause inside the play breaks alignment after it); taiko/catch refused;
+  custom lazer rates (not DT/HT) not known from the legacy format.

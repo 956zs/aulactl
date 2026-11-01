@@ -31,6 +31,10 @@ code it reports and refuses to write to anything else.
 - Live key travel (terminal map or GUI heatmap with peak hold), key tester, any-key calibration
 - `aulactl feed`: live key depth and press/release as JSON lines for other programs (e.g. an on-screen key
   overlay); contract in [docs/feed.md](docs/feed.md)
+- osu! replay link: `aulactl feed --record` saves every raw travel sample of a session; `aulactl replay report`
+  aligns it with the replay osu!lazer exports and writes an HTML report (depth at each press, peak depth,
+  bottom-out ratio, hold time, rapid-trigger re-presses, shallow presses, zoomable timeline); also from the GUI's
+  Live page. See [docs/feed.md](docs/feed.md#recording-sessions---record)
 - Backup / restore / diff, host-side named profiles
 
 ## Install
