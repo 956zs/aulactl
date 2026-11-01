@@ -138,7 +138,7 @@ fn sessions(out: &mut dyn Write, dirs: &Dirs, rest: &[&str]) -> Result<(), Strin
                         } else {
                             &s.header.label
                         },
-                        if s.truncated { "  [cut off]" } else { "" }
+                        status_note(&s)
                     ),
                 )?;
             }
@@ -148,6 +148,17 @@ fn sessions(out: &mut dyn Write, dirs: &Dirs, rest: &[&str]) -> Result<(), Strin
     Ok(())
 }
 
+
+/// `[recording…]` for a session a feed is still writing, `[cut off]` for one whose recorder died.
+fn status_note(s: &session::Session) -> &'static str {
+    if !s.truncated {
+        ""
+    } else if session::is_being_written(&s.path) {
+        "  [recording…]"
+    } else {
+        "  [cut off]"
+    }
+}
 /// `replay match [--exports DIR] [--limit N]`
 fn matches(out: &mut dyn Write, dirs: &Dirs, rest: &[&str]) -> Result<(), String> {
     let mut a = Args::new(rest);
@@ -378,6 +389,50 @@ mod tests {
         assert!(run_text(&dirs, &["sessions", "--limit", "0"]).is_err());
         assert!(run_text(&dirs, &["bogus"]).is_err());
         assert!(run_text(&dirs, &[]).is_err());
+    }
+
+    #[test]
+    fn live_and_cut_off_sessions() {
+        let s = Scratch::new("live");
+        let dirs = s.dirs();
+        let mut header = Header {
+            schema: SCHEMA,
+            label: "live".into(),
+            start_unix_ms: START,
+            start_mono_ms: 0.0,
+            product: "P".into(),
+            firmware: "F".into(),
+            max_mm: 3.4,
+            keys: Vec::new(),
+        };
+        let mut w = Writer::create(&s.0.join("sessions"), &header).unwrap();
+        w.edge(5.0, "KeyZ", Edge::Press).unwrap();
+        w.flush().unwrap();
+        let list = run_text(&dirs, &["sessions"]).unwrap();
+        assert!(list.contains("[recording…]"), "{list}");
+        // a file left unfinished by a killed recorder, closed and old
+        header.label = "dead".into();
+        header.start_unix_ms += 60_000;
+        let mut w2 = Writer::create(&s.0.join("sessions"), &header).unwrap();
+        w2.flush().unwrap();
+        let bytes = std::fs::read(w2.path()).unwrap();
+        let finished = w2.path().to_path_buf();
+        drop(w2);
+        std::fs::remove_file(&finished).unwrap();
+        let path = s.0.join("sessions/20261101-000200-dead.ndjson.gz");
+        std::fs::write(&path, &bytes).unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let list = run_text(&dirs, &["sessions"]).unwrap();
+        assert!(list.contains("dead  [cut off]"), "{list}");
+        drop(w);
+        let list = run_text(&dirs, &["sessions"]).unwrap();
+        assert!(!list.contains("live  ["), "finished: {list}");
     }
 
     #[test]
