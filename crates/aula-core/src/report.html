@@ -55,7 +55,7 @@ footer { color: var(--dim); font-size: 12px; margin: 18px 0 6px; }
     <div class="scroll"><table id="stats"></table></div>
     <div class="sub" style="margin-top:8px">
       判定時深度＝回放記錄按下的瞬間鍵盤的行程；峰值＝每次按下期間最深處；觸底＝峰值 ≥ 最大行程 − 0.1 mm；
-      RT 連按＝上次放開後未回到觸發點之上就再次按下；淺按＝峰值 &lt; 觸發點 + 0.5 mm。
+      RT 連按＝上次放開後未回到觸發點之上就再次按下；淺按＝峰值 &lt; 觸發點 + 0.5 mm。行程資料比按鍵回報晚約數毫秒，判定時深度與峰值會往後多看 8 ms；沒有任何行程資料的按壓列為「無行程資料」，不計入深度統計。
     </div>
   </section>
 
@@ -122,7 +122,7 @@ for (const [label, value, cls] of [
   $("align").append(k);
 }
 
-const head = ["按鍵", "回放輸入", "觸發設定", "按壓", "判定時深度 p10 / 中位 / p90 (mm)", "峰值中位 (mm)", "峰值 p10", "觸底比例", "按住時間中位 (ms)", "按住 p10 – p90", "RT 連按", "淺按"];
+const head = ["按鍵", "回放輸入", "觸發設定", "按壓", "判定時深度 p10 / 中位 / p90 (mm)", "峰值中位 (mm)", "峰值 p10", "觸底比例", "按住時間中位 (ms)", "按住 p10 – p90", "RT 連按", "淺按", "無行程資料"];
 const tr = el("tr");
 head.forEach((h, i) => tr.append(el("th", h, i < 3 ? "l" : "")));
 $("stats").append(tr);
@@ -134,7 +134,7 @@ for (const k of R.keys) {
     [`${k.label} (${k.code})`, "l"], [k.input, "l"], [trig + " mm", "l"],
     [`${s.presses}`], [`${f(s.at_down_p10)} / ${f(s.at_down_median)} / ${f(s.at_down_p90)}`],
     [f(s.peak_median)], [f(s.peak_p10)], [s.bottom_out_ratio === null ? "–" : `${(s.bottom_out_ratio * 100).toFixed(1)} %`],
-    [f(s.hold_median, 1)], [`${f(s.hold_p10, 1)} – ${f(s.hold_p90, 1)}`], [`${s.rt_repress}`], [`${s.shallow}`],
+    [f(s.hold_median, 1)], [`${f(s.hold_p10, 1)} – ${f(s.hold_p90, 1)}`], [`${s.rt_repress}`], [`${s.shallow}`], [`${s.no_data ?? 0}`],
   ].forEach(([t, cls]) => row.append(el("td", t, cls)));
   $("stats").append(row);
 }

@@ -90,6 +90,8 @@ pub struct KeyStats {
     /// Presses that came without the key returning above the actuation point since the previous release.
     pub rt_repress: usize,
     pub shallow: usize,
+    /// Presses the travel stream has no samples for (left out of the depth figures).
+    pub no_data: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -122,25 +124,60 @@ pub fn lowest(samples: &[(f64, f64)], from: f64, to: f64) -> f64 {
     samples[start..end.max(start)].iter().map(|s| s.1).fold(depth_at(samples, from), f64::min)
 }
 
+/// How far the travel stream may trail the HID report the replay recorded (ms). The board sends travel frames
+/// every ~1.5–5 ms while a key moves, so at the aligned press instant the newest sample can still be from
+/// before the key reached the actuation point.
+pub const STREAM_LAG_MS: f64 = 8.0;
+
+/// Depth (mm) when the replay registered a press at session time `t`, allowing for the stream lag: the depth
+/// at `t` if it is at or past `point`; else the first sample in (t, t + `STREAM_LAG_MS`] that reaches the point;
+/// else the deepest sample in that window (or the depth at `t` when there is none).
+pub fn judgement_depth(samples: &[(f64, f64)], t: f64, point: f64) -> f64 {
+    let d = depth_at(samples, t);
+    if d >= point {
+        return d;
+    }
+    let from = samples.partition_point(|s| s.0 <= t);
+    let to = samples.partition_point(|s| s.0 <= t + STREAM_LAG_MS);
+    let window = &samples[from..to.max(from)];
+    window.iter().find(|s| s.1 >= point).map_or_else(|| window.iter().map(|s| s.1).fold(d, f64::max), |s| s.1)
+}
+
+/// Whether any sample lies in (from − `STREAM_LAG_MS`, to + `STREAM_LAG_MS`]: a key that moved has samples there
+/// (the stream only reports movement), so a press without any was not seen by the stream at all.
+pub fn has_samples(samples: &[(f64, f64)], from: f64, to: f64) -> bool {
+    let a = samples.partition_point(|s| s.0 <= from - STREAM_LAG_MS);
+    let b = samples.partition_point(|s| s.0 <= to + STREAM_LAG_MS);
+    b > a
+}
+
 /// Statistics of one key over the replay spans it played (`spans` in session ms, time order; `matched` flags).
+/// Presses without travel samples count as `no_data` and are left out of the depth figures. Returns the
+/// shallow presses as (span index, peak).
 pub fn key_stats(samples: &[(f64, f64)], spans: &[(f64, f64)], matched: &[bool], point: f64, max_mm: f64) -> (KeyStats, Vec<(usize, f64)>) {
     let mut at_down = Vec::new();
     let mut peaks = Vec::new();
     let mut holds = Vec::new();
     let mut shallow = Vec::new();
     let mut rt_repress = 0;
+    let mut no_data = 0;
     for (i, &(down, up)) in spans.iter().enumerate() {
         let up = up.max(down);
-        at_down.push(depth_at(samples, down));
-        let p = peak(samples, down, up);
-        peaks.push(p);
         holds.push(up - down);
+        if !has_samples(samples, down, up) {
+            no_data += 1;
+            continue;
+        }
+        at_down.push(judgement_depth(samples, down, point));
+        // the stream trails the replay: the press span is extended by the lag
+        let p = peak(samples, down, up + STREAM_LAG_MS);
+        peaks.push(p);
         if p < point + SHALLOW_MARGIN_MM {
             shallow.push((i, p));
         }
         if i > 0 {
             let prev_up = spans[i - 1].1;
-            if prev_up <= down && lowest(samples, prev_up, down) >= point {
+            if prev_up <= down && lowest(samples, prev_up + STREAM_LAG_MS, down + STREAM_LAG_MS) >= point {
                 rt_repress += 1;
             }
         }
@@ -162,6 +199,7 @@ pub fn key_stats(samples: &[(f64, f64)], spans: &[(f64, f64)], matched: &[bool],
         hold_p90: r1(quantile(&holds, 0.9)),
         rt_repress,
         shallow: shallow.len(),
+        no_data,
     };
     (stats, shallow)
 }
@@ -308,9 +346,43 @@ mod tests {
         let (empty, none) = key_stats(&s, &[], &[], 1.0, 3.4);
         assert_eq!(empty, KeyStats::default());
         assert!(none.is_empty());
-        let (no_depth, _) = key_stats(&[], &spans, &[false; 3], 1.0, 3.4);
-        assert_eq!(no_depth.peak_median, Some(0.0));
-        assert_eq!(no_depth.shallow, 3);
+        let (no_depth, shallow) = key_stats(&[], &spans, &[false; 3], 1.0, 3.4);
+        assert_eq!((no_depth.no_data, no_depth.presses), (3, 3));
+        assert_eq!((no_depth.peak_median, no_depth.at_down_median), (None, None), "no data is not 0.00 mm");
+        assert_eq!(no_depth.shallow, 0);
+        assert!(shallow.is_empty());
+        assert_eq!(no_depth.hold_median, Some(25.0), "hold times come from the replay");
+    }
+
+    /// The travel stream trails the HID report: at the aligned press instant the newest sample is still the
+    /// key at rest.
+    #[test]
+    fn lagged_stream() {
+        // press registered at 100 (point 1.0); samples arrive 3 ms later
+        let s = [(103.0, 0.6), (105.0, 1.4), (108.0, 2.5), (140.0, 1.0), (146.0, 0.0)];
+        assert_eq!(depth_at(&s, 100.0), 0.0);
+        assert_eq!(judgement_depth(&s, 100.0, 1.0), 1.4, "first sample past the point within the lag");
+        assert_eq!(judgement_depth(&s, 106.0, 1.0), 1.4, "already past the point at t");
+        assert_eq!(judgement_depth(&s, 100.0, 3.0), 2.5, "never reaches the point: deepest in the window");
+        assert_eq!(judgement_depth(&s, 120.0, 3.0), 2.5, "nothing in the window: depth at t");
+        assert_eq!(judgement_depth(&[], 1.0, 1.0), 0.0);
+        assert!(has_samples(&s, 100.0, 130.0));
+        assert!(has_samples(&s, 150.0, 160.0), "the last sample within the lag before the press");
+        assert!(!has_samples(&s, 160.0, 170.0));
+        assert!(!has_samples(&[], 0.0, 1.0));
+        // replay span 100..137, release seen by the stream 3 ms late; the peak counts the lagged samples
+        let spans = [(100.0, 137.0), (300.0, 330.0)];
+        let (st, shallow) = key_stats(&s, &spans, &[true, true], 1.0, 3.4);
+        assert_eq!(st.at_down_median, Some(1.4));
+        assert_eq!(st.at_down_p10, Some(1.4), "no 0.00 from the lag");
+        assert_eq!(st.peak_median, Some(2.5));
+        assert_eq!(st.no_data, 1, "the second press has no samples");
+        assert!(shallow.is_empty());
+        // a real shallow press, peaking just after its replay release
+        let s = [(98.0, 0.5), (101.0, 1.1), (131.0, 1.3), (134.0, 0.0)];
+        let (st, shallow) = key_stats(&s, &[(100.0, 128.0)], &[true], 1.0, 3.4);
+        assert_eq!(shallow, vec![(0, 1.3)]);
+        assert_eq!(st.at_down_median, Some(1.1));
     }
 
     fn header() -> Header {

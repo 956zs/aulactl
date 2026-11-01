@@ -382,6 +382,35 @@ fn parse_header(line: &[u8]) -> std::result::Result<Header, String> {
     serde_json::from_value(v).map_err(|e| format!("bad session header: {e}"))
 }
 
+/// A file modified this recently counts as still being written.
+const RECENT_WRITE: Duration = Duration::from_secs(5);
+
+/// Whether a recorder is probably still writing `path`: modified in the last 5 s, or held open by a process
+/// (a running feed that is idle writes nothing, e.g. on a results screen). An unfinished file that is not
+/// being written was cut off.
+pub fn is_being_written(path: &Path) -> bool {
+    let recent = fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age < RECENT_WRITE);
+    recent || is_open_anywhere(path, Path::new("/proc"))
+}
+
+/// Whether any process under `proc` (the user's own; others are unreadable) has `path` open.
+fn is_open_anywhere(path: &Path, proc: &Path) -> bool {
+    let Ok(target) = fs::canonicalize(path) else { return false };
+    let Ok(procs) = fs::read_dir(proc) else { return false };
+    procs
+        .flatten()
+        .filter(|e| e.file_name().to_str().is_some_and(|n| n.bytes().all(|b| b.is_ascii_digit())))
+        .any(|e| {
+            fs::read_dir(e.path().join("fd"))
+                .map(|fds| fds.flatten().any(|fd| fs::read_link(fd.path()).is_ok_and(|l| l == target)))
+                .unwrap_or(false)
+        })
+}
+
 /// Session files in `dir`, oldest first (names start with the UTC start time). A missing dir is empty.
 pub fn list(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut v: Vec<PathBuf> = match fs::read_dir(dir) {
@@ -601,6 +630,24 @@ mod tests {
         let s = read_from(p, &gz(&text)[..]).unwrap();
         assert!(s.presses.is_empty() && s.depth.is_empty());
         assert!(!s.truncated);
+    }
+
+    #[test]
+    fn files_being_written() {
+        let d = temp_dir("session-live");
+        let p = d.join("a.ndjson.gz");
+        let f = File::create(&p).unwrap();
+        assert!(is_being_written(&p), "just written");
+        // this process holds it open (found in /proc even when old)
+        assert!(is_open_anywhere(&p, Path::new("/proc")));
+        drop(f);
+        assert!(!is_open_anywhere(&p, Path::new("/proc")));
+        let old = std::time::SystemTime::now() - Duration::from_secs(60);
+        File::options().write(true).open(&p).unwrap().set_modified(old).unwrap();
+        assert!(!is_being_written(&p), "old and closed: cut off");
+        assert!(!is_being_written(&d.join("missing")));
+        assert!(!is_open_anywhere(&p, &d.join("no-proc")));
+        fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]
