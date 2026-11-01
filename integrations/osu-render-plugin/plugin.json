@@ -1,0 +1,47 @@
+{
+  "id": "aula-keys",
+  "name": "AULA keyboard overlay",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "description": "Lays the keyboard recorded with aulactl (key travel, presses, KPS, tapping BPM, KeyOverlay-style bars) over the video.",
+  "entry": "index.mjs",
+  "platforms": ["linux"],
+  "options": [
+    { "key": "corner", "type": "select", "values": ["top-left", "top-right", "bottom-left", "bottom-right"], "default": "bottom-right" },
+    { "key": "size", "type": "number", "min": 20, "max": 80, "step": 5, "default": 40, "unit": "%" },
+    { "key": "opacity", "type": "number", "min": 20, "max": 100, "step": 5, "default": 90, "unit": "%" },
+    { "key": "showDepth", "type": "toggle", "default": false }
+  ],
+  "i18n": {
+    "en": {
+      "name": "AULA keyboard overlay",
+      "description": "Lays the keyboard recorded with aulactl over the video: key travel, presses, KPS and tapping BPM. Skipped when no recorded session matches the replay.",
+      "options": {
+        "corner": { "label": "Position", "values": { "top-left": "Top left", "top-right": "Top right", "bottom-left": "Bottom left", "bottom-right": "Bottom right" } },
+        "size": { "label": "Size (% of the video height)" },
+        "opacity": { "label": "Opacity" },
+        "showDepth": { "label": "Show the travel in mm" }
+      }
+    },
+    "zh-TW": {
+      "name": "AULA 鍵盤覆蓋層",
+      "description": "把 aulactl 錄下的鍵盤疊在影片上：按鍵行程、按壓次數、KPS 與連打 BPM。找不到對應這個 replay 的錄製時會略過。",
+      "options": {
+        "corner": { "label": "位置", "values": { "top-left": "左上", "top-right": "右上", "bottom-left": "左下", "bottom-right": "右下" } },
+        "size": { "label": "大小（影片高度的 %）" },
+        "opacity": { "label": "不透明度" },
+        "showDepth": { "label": "顯示行程（mm）" }
+      }
+    },
+    "es": {
+      "name": "Teclado AULA superpuesto",
+      "description": "Superpone al video el teclado grabado con aulactl: recorrido de las teclas, pulsaciones, KPS y BPM de tapping. Se omite si ninguna sesión grabada coincide con la repetición.",
+      "options": {
+        "corner": { "label": "Posición", "values": { "top-left": "Arriba a la izquierda", "top-right": "Arriba a la derecha", "bottom-left": "Abajo a la izquierda", "bottom-right": "Abajo a la derecha" } },
+        "size": { "label": "Tamaño (% de la altura del video)" },
+        "opacity": { "label": "Opacidad" },
+        "showDepth": { "label": "Mostrar el recorrido en mm" }
+      }
+    }
+  }
+}
