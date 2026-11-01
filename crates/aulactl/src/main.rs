@@ -107,7 +107,7 @@ replay (osu! replays vs recorded feed sessions; no keyboard needed)
                                 align a replay with a session and write an HTML report
   replay overlay [SESSION|latest|auto] --osr FILE --out FILE.mov|.webm|.mkv|- [--width W] [--height H]
          [--fps N] [--start-ms S] [--duration-ms D] [--preroll-ms P] [--bar-speed PX] [--font FILE]
-         [--ffmpeg BIN] [--json-only]
+         [--ffmpeg BIN] [--show-depth] [--json-only]
                                 transparent key overlay video on the replay's song clock (frame 0 = song
                                 ms S; auto = the session that lines up, exit 3 if none); --json-only
                                 prints the aligned presses and travel instead; --out - writes raw RGBA

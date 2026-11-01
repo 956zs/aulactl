@@ -1,6 +1,7 @@
 //! Key overlay frames: the overlay at one song time drawn into an RGBA pixmap (pure: same scene, style and
 //! time give the same pixels). Styled after osu! "KeyOverlay": a keycap per recorded key with its live travel
-//! (fill from the top), the actuation point and its press count; a stats line (KPS, peak KPS, tapping BPM);
+//! (a fill rising from the bottom that fades in at its top edge), the actuation point as notches on the
+//! cap's side edges and its press count; a stats line (KPS, peak KPS, tapping BPM);
 //! and a bar per press rising from its key (length = hold time, scrolling up at a constant speed, fading out
 //! at the top), wider and brighter the deeper the press went.
 
@@ -8,8 +9,8 @@ use super::font::{Font, Rgba};
 use aula_core::overlay::{Data, Press};
 use aula_core::report::depth_at;
 use tiny_skia::{
-    Color, FillRule, GradientStop, LinearGradient, Paint, Path, PathBuilder, Pixmap, Point, Rect,
-    SpreadMode, Stroke, Transform,
+    Color, FillRule, GradientStop, LinearGradient, Mask, Paint, Path, PathBuilder, Pixmap, Point,
+    Rect, SpreadMode, Stroke, Transform,
 };
 
 /// KPS window (real ms).
@@ -20,6 +21,8 @@ const BPM_WINDOW_MS: f64 = 2000.0;
 const BPM_PRESSES: usize = 9;
 /// ... and at least this many.
 const BPM_MIN_PRESSES: usize = 4;
+/// Stats line colour.
+const STATS_COLOUR: Rgba = [240, 240, 245, 235];
 /// Key colours, cycled.
 const PALETTE: [Rgba; 6] = [
     [255, 102, 170, 255],
@@ -37,6 +40,8 @@ pub struct Style {
     pub height: u32,
     /// Bar scroll speed in px per real second; None = the bar area's height in 1.2 s.
     pub bar_speed: Option<f32>,
+    /// Draw the travel in mm above the legend.
+    pub show_depth: bool,
 }
 
 /// Overlay data with the lookups the frames need (sorted press times, running peak KPS).
@@ -281,35 +286,37 @@ fn colour_of(i: usize) -> Rgba {
 pub fn render(scene: &Scene, style: &Style, font: &mut Font, t: f64, pm: &mut Pixmap) {
     pm.fill(Color::TRANSPARENT);
     let l = Layout::new(style, scene.data.keys.len());
-    let max_mm = scene.data.max_mm;
     for k in 0..scene.data.keys.len() {
         draw_bars(scene, &l, k, t, pm);
     }
     for k in 0..scene.data.keys.len() {
-        draw_key(scene, &l, font, k, t, pm, max_mm);
+        draw_key(scene, &l, style, font, k, t, pm);
     }
-    let bpm = scene
-        .bpm(t)
-        .map_or_else(|| "-".to_string(), |b| format!("{:.0}", b));
-    let stats = format!(
-        "KPS {}   MAX {}   BPM {}",
-        scene.kps(t),
-        scene.peak_kps(t),
-        bpm
-    );
+    // "BPM -" (not enough presses yet) is drawn dimmer than the numbers
+    let bpm = scene.bpm(t);
+    let lead = format!("KPS {}   MAX {}   ", scene.kps(t), scene.peak_kps(t));
+    let tail = bpm.map_or_else(|| "BPM -".to_string(), |b| format!("BPM {b:.0}"));
     let mut size = l.stats_size;
     let room = style.width as f32 * 0.96;
-    let w = font.width(&stats, size);
-    if w > room {
-        size *= room / w;
+    let (lw, tw) = (font.width(&lead, size), font.width(&tail, size));
+    if lw + tw > room {
+        size *= room / (lw + tw);
     }
+    let (lw, tw) = (font.width(&lead, size), font.width(&tail, size));
+    let left = (style.width as f32 - lw - tw) / 2.0;
+    font.draw(pm, &lead, left + lw / 2.0, l.stats_y, size, STATS_COLOUR);
+    let tail_colour = if bpm.is_some() {
+        STATS_COLOUR
+    } else {
+        with_alpha(STATS_COLOUR, 0.45)
+    };
     font.draw(
         pm,
-        &stats,
-        style.width as f32 / 2.0,
+        &tail,
+        left + lw + tw / 2.0,
         l.stats_y,
         size,
-        [240, 240, 245, 235],
+        tail_colour,
     );
 }
 
@@ -373,72 +380,185 @@ fn draw_bars(scene: &Scene, l: &Layout, k: usize, t: f64, pm: &mut Pixmap) {
     }
 }
 
+/// Cap colours: the body, idle and pressed (brighter, tinted towards the key's colour).
+const CAP: Rgba = [24, 24, 32, 200];
+/// Legend tones; the one that contrasts more with what is behind the legend is used.
+const LEGEND_LIGHT: Rgba = [245, 245, 250, 255];
+const LEGEND_DARK: Rgba = [18, 18, 26, 255];
+/// Travel fill opacity at its top edge and at the bottom of the cap; pressed caps are this much stronger.
+const FILL_ALPHA_TOP: f64 = 0.05;
+const FILL_ALPHA_BOTTOM: f64 = 0.7;
+const PRESSED_BOOST: f64 = 1.3;
+
+/// Fill opacity at `position` (0 = the fill's top edge, 1 = the bottom of the cap).
+pub fn fill_alpha(position: f64, pressed: bool) -> f64 {
+    let a = FILL_ALPHA_TOP + (FILL_ALPHA_BOTTOM - FILL_ALPHA_TOP) * position.clamp(0.0, 1.0);
+    (if pressed { a * PRESSED_BOOST } else { a }).min(1.0)
+}
+
+/// `a` over `b` by `alpha` (colour channels only).
+fn mix(b: Rgba, a: Rgba, alpha: f64) -> Rgba {
+    let m = |x: u8, y: u8| (x as f64 + (y as f64 - x as f64) * alpha.clamp(0.0, 1.0)).round() as u8;
+    [m(b[0], a[0]), m(b[1], a[1]), m(b[2], a[2]), b[3]]
+}
+
+/// WCAG relative luminance.
+fn luminance(c: Rgba) -> f64 {
+    let lin = |v: u8| {
+        let v = v as f64 / 255.0;
+        if v <= 0.03928 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2])
+}
+
+fn contrast(a: Rgba, b: Rgba) -> f64 {
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+/// The cap colour: brighter and tinted towards `accent` while pressed.
+fn cap_colour(accent: Rgba, pressed: bool) -> Rgba {
+    if pressed {
+        lighten(mix(CAP, accent, 0.18), 0.06)
+    } else {
+        CAP
+    }
+}
+
+/// Legend colour over a cap filled to `fraction` (the fill reaches the legend at the centre).
+pub fn legend_colour(accent: Rgba, fraction: f64, pressed: bool) -> Rgba {
+    let cap = cap_colour(accent, pressed);
+    let backdrop = if fraction < 0.5 {
+        cap
+    } else {
+        // where the cap's centre sits in the fill's gradient
+        mix(cap, accent, fill_alpha(1.0 - 0.5 / fraction, pressed))
+    };
+    if contrast(backdrop, LEGEND_DARK) > contrast(backdrop, LEGEND_LIGHT) {
+        LEGEND_DARK
+    } else {
+        LEGEND_LIGHT
+    }
+}
+
 fn draw_key(
     scene: &Scene,
     l: &Layout,
+    style: &Style,
     font: &mut Font,
     k: usize,
     t: f64,
     pm: &mut Pixmap,
-    max_mm: f64,
 ) {
     let key = &scene.data.keys[k];
-    let colour = colour_of(k);
+    let max_mm = scene.data.max_mm;
+    let accent = colour_of(k);
     let (x, y, s) = (l.key_x(k), l.key_top, l.key);
     let held = scene.held(k, t);
     let depth = scene.depth(k, t).clamp(0.0, max_mm);
+    let fraction = depth / max_mm;
     let radius = s * 0.14;
-    if let Some(body) = rounded_rect(x, y, s, s, radius) {
-        pm.fill_path(
-            &body,
-            &paint([16, 16, 24, 180]),
-            FillRule::Winding,
-            Transform::identity(),
-            None,
-        );
-    }
-    // travel: fills from the top as the key goes down
-    let inset = s * 0.08;
-    let (ix, iy, iw, ih) = (x + inset, y + inset, s - 2.0 * inset, s - 2.0 * inset);
-    let fill_h = ih * (depth / max_mm) as f32;
+    let border = (s * if held { 0.045 } else { 0.025 }).max(1.0);
+    let Some(body) = rounded_rect(x, y, s, s, radius) else {
+        return;
+    };
+    pm.fill_path(
+        &body,
+        &paint(cap_colour(accent, held)),
+        FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
+    // travel: a cap-shaped gradient revealed from the bottom, fading in at its top edge (no edge line)
+    let (iy, ih) = (y + border, s - 2.0 * border);
+    let fill_h = ih * fraction as f32;
     if fill_h > 0.5 {
-        if let Some(fill) = rounded_rect(ix, iy, iw, fill_h, radius * 0.6) {
-            let c = with_alpha(colour, if held { 0.85 } else { 0.5 });
+        let top = y + border + ih - fill_h;
+        let shape = rounded_rect(
+            x + border,
+            iy,
+            s - 2.0 * border,
+            ih,
+            (radius - border).max(0.0),
+        );
+        let reveal = Rect::from_xywh(x, top, s, y + s - top).map(PathBuilder::from_rect);
+        let mask = Mask::new(pm.width(), pm.height())
+            .zip(reveal)
+            .map(|(mut m, r)| {
+                m.fill_path(&r, FillRule::Winding, false, Transform::identity());
+                m
+            });
+        let alpha = |p: f64| (fill_alpha(p, held) * 255.0).round() as u8;
+        let shader = LinearGradient::new(
+            Point::from_xy(0.0, top),
+            Point::from_xy(0.0, y + s - border),
+            vec![
+                GradientStop::new(
+                    0.0,
+                    Color::from_rgba8(accent[0], accent[1], accent[2], alpha(0.0)),
+                ),
+                GradientStop::new(
+                    1.0,
+                    Color::from_rgba8(accent[0], accent[1], accent[2], alpha(1.0)),
+                ),
+            ],
+            SpreadMode::Pad,
+            Transform::identity(),
+        );
+        if let (Some(shape), Some(mask), Some(shader)) = (shape, mask, shader) {
+            let p = Paint {
+                shader,
+                anti_alias: true,
+                ..Paint::default()
+            };
             pm.fill_path(
-                &fill,
-                &paint(c),
+                &shape,
+                &p,
+                FillRule::Winding,
+                Transform::identity(),
+                Some(&mask),
+            );
+        }
+    }
+    // actuation point: short low-contrast notches on both side edges, never across the legend
+    let ay = iy + ih * (1.0 - (key.point / max_mm).clamp(0.0, 1.0) as f32);
+    let (nw, nh) = ((s * 0.07).max(3.0), (s * 0.022).max(1.0));
+    for nx in [x + border, x + s - border - nw] {
+        if let Some(r) = rounded_rect(nx, ay - nh / 2.0, nw, nh, nh / 2.0) {
+            pm.fill_path(
+                &r,
+                &paint([200, 200, 210, 120]),
                 FillRule::Winding,
                 Transform::identity(),
                 None,
             );
         }
     }
-    // actuation point
-    let ay = iy + ih * (key.point / max_mm).clamp(0.0, 1.0) as f32;
-    let mut tick = PathBuilder::new();
-    tick.move_to(x + inset * 0.3, ay);
-    tick.line_to(x + s - inset * 0.3, ay);
-    if let Some(tick) = tick.finish() {
-        let stroke = Stroke {
-            width: (s * 0.02).max(1.0),
-            ..Stroke::default()
-        };
+    let stroke = Stroke {
+        width: border,
+        ..Stroke::default()
+    };
+    let edge = if held { accent } else { [255, 255, 255, 70] };
+    if let Some(edge_path) = rounded_rect(
+        x + border / 2.0,
+        y + border / 2.0,
+        s - border,
+        s - border,
+        radius,
+    ) {
         pm.stroke_path(
-            &tick,
-            &paint([255, 255, 255, 170]),
+            &edge_path,
+            &paint(edge),
             &stroke,
             Transform::identity(),
             None,
         );
     }
-    if let Some(body) = rounded_rect(x, y, s, s, radius) {
-        let stroke = Stroke {
-            width: (s * 0.035).max(1.0),
-            ..Stroke::default()
-        };
-        let c = if held { colour } else { [255, 255, 255, 110] };
-        pm.stroke_path(&body, &paint(c), &stroke, Transform::identity(), None);
-    }
+    let legend = legend_colour(accent, fraction, held);
     let label = if key.label.is_empty() {
         &key.code
     } else {
@@ -449,30 +569,26 @@ fn draw_key(
     if w > s * 0.8 {
         size *= s * 0.8 / w;
     }
-    font.draw(
-        pm,
-        label,
-        x + s / 2.0,
-        y + s * 0.45,
-        size,
-        [255, 255, 255, 245],
-    );
+    font.draw(pm, label, x + s / 2.0, y + s * 0.45, size, legend);
+    let count_colour = with_alpha(legend, 0.8);
     font.draw(
         pm,
         &scene.count(k, t).to_string(),
         x + s / 2.0,
         y + s * 0.78,
         s * 0.16,
-        [235, 235, 240, 210],
+        count_colour,
     );
-    font.draw(
-        pm,
-        &format!("{depth:.2}"),
-        x + s / 2.0,
-        y + s * 0.2,
-        s * 0.12,
-        [235, 235, 240, 170],
-    );
+    if style.show_depth {
+        font.draw(
+            pm,
+            &format!("{depth:.2}"),
+            x + s / 2.0,
+            y + s * 0.2,
+            s * 0.12,
+            with_alpha(legend, 0.65),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -539,6 +655,7 @@ mod tests {
             width: 200,
             height: 300,
             bar_speed: None,
+            show_depth: false,
         }
     }
 
@@ -579,6 +696,140 @@ mod tests {
         assert_eq!(s.depth(0, 1010.0), 3.4);
         assert_eq!(s.depth(0, 1100.0), 0.0);
         assert_eq!(s.depth(7, 1100.0), 0.0, "no such key");
+    }
+
+    /// One idle Z cap (point 1.0 of 3.4 mm) at rest and a canvas just for it.
+    fn idle_cap() -> (Pixmap, Layout) {
+        let s = Scene::new(data(
+            vec![key("KeyZ", vec![press(5000.0, 5100.0, 3.0)])],
+            1.0,
+        ))
+        .unwrap();
+        let pm = render_at(&s, 0.0);
+        (pm, Layout::new(&style(), 1))
+    }
+
+    #[test]
+    fn actuation_point_is_edge_notches_not_a_line() {
+        let (pm, l) = idle_cap();
+        let (x, s) = (l.key_x(0), l.key);
+        let border = (s * 0.025).max(1.0);
+        let ay = (l.key_top + border + (s - 2.0 * border) * (1.0 - 1.0 / 3.4) as f32) as u32;
+        let px = |x: f32| pm.pixel(x as u32, ay).unwrap().demultiply();
+        // a notch at both side edges ...
+        assert!(
+            px(x + border + 1.0).red() > 80,
+            "{:?}",
+            px(x + border + 1.0)
+        );
+        assert!(px(x + s - border - 2.0).red() > 80);
+        // ... and only the dark cap between them (a quarter in, away from the legend)
+        let mid = px(x + s * 0.25);
+        assert!(mid.red() < 60 && mid.green() < 60, "{mid:?}");
+    }
+
+    #[test]
+    fn fill_rises_from_the_bottom_and_fades_in() {
+        // released at 1200 but resting at half travel: the fill shows travel, not the press
+        let mut z = key("KeyZ", vec![press(1000.0, 1200.0, 1.7)]);
+        z.depth = vec![(1000.0, 1.7)];
+        let s = Scene::new(data(vec![z], 1.0)).unwrap();
+        let l = Layout::new(&style(), 1);
+        let pm = render_at(&s, 1500.0);
+        let cx = (l.key_x(0) + l.key * 0.2) as u32;
+        let at = |f: f32| {
+            pm.pixel(cx, (l.key_top + l.key * f) as u32)
+                .unwrap()
+                .demultiply()
+        };
+        // half travel: the bottom is tinted pink, the top half only the cap
+        let (bottom, top) = (at(0.92), at(0.2));
+        assert!(bottom.red() > bottom.green() + 40, "{bottom:?}");
+        assert!(top.red() < 60, "{top:?}");
+        // the fill gets stronger towards the bottom (no hard line at its top edge)
+        let (upper, lower) = (at(0.56), at(0.85));
+        assert!(lower.red() > upper.red(), "{upper:?} {lower:?}");
+    }
+
+    #[test]
+    fn pressed_caps_get_a_thicker_accent_border() {
+        let s = stream(1.0);
+        let l = Layout::new(&style(), 2);
+        let pm = render_at(&s, 1020.0); // Z held, X idle
+        let y = (l.key_top + l.key / 2.0) as u32;
+        let edge = |k: usize| {
+            (0..6)
+                .filter(|d| {
+                    let p = pm.pixel(l.key_x(k) as u32 + d, y).unwrap().demultiply();
+                    p.alpha() > 0 && p.red() > 200 && p.green() < 150
+                })
+                .count()
+        };
+        assert!(edge(0) >= 2, "{}", edge(0));
+        assert_eq!(edge(1), 0);
+    }
+
+    #[test]
+    fn legend_picks_the_readable_tone() {
+        let (pink, white) = (PALETTE[0], [255, 255, 255, 255]);
+        // empty cap: light legend
+        assert_eq!(legend_colour(pink, 0.0, false), LEGEND_LIGHT);
+        assert_eq!(
+            legend_colour(white, 0.4, true),
+            LEGEND_LIGHT,
+            "fill below the legend"
+        );
+        // a bright fill behind the legend: dark reads better
+        assert_eq!(legend_colour(white, 1.0, true), LEGEND_DARK);
+        assert!(fill_alpha(1.0, true) > fill_alpha(1.0, false));
+        assert!(fill_alpha(0.0, false) < fill_alpha(1.0, false));
+        assert!(fill_alpha(5.0, true) <= 1.0);
+        assert!(contrast([0, 0, 0, 255], [255, 255, 255, 255]) > 20.0);
+    }
+
+    #[test]
+    fn depth_number_only_on_request() {
+        let mut z = key("KeyZ", vec![press(1000.0, 2000.0, 2.0)]);
+        z.depth = vec![(1000.0, 2.0)];
+        let s = Scene::new(data(vec![z], 1.0)).unwrap();
+        let l = Layout::new(&style(), 1);
+        let band = |pm: &Pixmap| {
+            let (x, y) = (l.key_x(0) + l.key * 0.3, l.key_top + l.key * 0.15);
+            alpha_in(
+                pm,
+                x as u32,
+                y as u32,
+                (x + l.key * 0.4) as u32,
+                (y + l.key * 0.1) as u32,
+            )
+        };
+        let plain = render_at(&s, 1500.0);
+        let mut st = style();
+        st.show_depth = true;
+        let mut with = Pixmap::new(st.width, st.height).unwrap();
+        render(&s, &st, &mut Font::Pixel, 1500.0, &mut with);
+        assert_ne!(band(&plain), band(&with));
+    }
+
+    #[test]
+    fn unknown_bpm_is_dimmer() {
+        let s = stream(1.0);
+        let l = Layout::new(&style(), 2);
+        let brightest = |pm: &Pixmap| {
+            (160..195u32)
+                .flat_map(|x| (0..6).map(move |dy| (x, dy)))
+                .map(|(x, dy)| pm.pixel(x, l.stats_y as u32 - 3 + dy).unwrap().alpha())
+                .max()
+                .unwrap()
+        };
+        // the right end of the line: "BPM -" before the stream, "BPM 120" during it
+        let (idle, busy) = (render_at(&s, 0.0), render_at(&s, 2400.0));
+        assert!(
+            brightest(&idle) < brightest(&busy),
+            "{} {}",
+            brightest(&idle),
+            brightest(&busy)
+        );
     }
 
     #[test]
@@ -719,6 +970,7 @@ mod tests {
             width: 8,
             height: 8,
             bar_speed: Some(100.0),
+            show_depth: true,
         };
         let mut pm = Pixmap::new(8, 8).unwrap();
         render(&s, &st, &mut Font::Pixel, 150.0, &mut pm);

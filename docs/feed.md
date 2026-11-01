@@ -106,12 +106,14 @@ aulactl replay report [SESSION|latest] [--osr FILE] [--exports DIR] [--open]
 ```sh
 aulactl replay overlay [SESSION|latest|auto] --osr FILE --out FILE.mov|.webm|.mkv|- [--width W] [--height H]
         [--fps N] [--start-ms S] [--duration-ms D] [--preroll-ms P] [--bar-speed PX] [--font FILE]
-        [--ffmpeg BIN] [--json-only]
+        [--ffmpeg BIN] [--show-depth] [--json-only]
 ```
 
 A transparent video in the style of the osu! "KeyOverlay" streamer tool, drawn from the recorded session that played
-the replay: per replay input (K1/K2, mania columns) the recorded key as a keycap with its live travel (filled from
-the top), the actuation point (line) and its press count; a stats line with KPS (presses in the last real second),
+the replay: per replay input (K1/K2, mania columns) the recorded key as a keycap with its live travel (a fill rising
+from the bottom that fades in at its top edge), the actuation point (short notches on the side edges) and its
+press count (the legend takes whichever of a light and a dark tone reads better; pressed = brighter cap and a
+thicker accent border; `--show-depth` adds the travel in mm); a stats line with KPS (presses in the last real second),
 the highest KPS so far and the tapping BPM (`15000 / median interval` of the last ≤ 9 presses of all keys within
 2 s, i.e. 1/4-note BPM; `-` with fewer than 4); and a bar per press that rises from its key (length = hold time,
 scrolling up at a constant speed, fading out in the top third), wider and brighter the deeper the press went.

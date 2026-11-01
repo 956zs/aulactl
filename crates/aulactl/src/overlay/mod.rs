@@ -100,7 +100,7 @@ fn parse_ms(v: &str, what: &str) -> Result<f64, String> {
 
 /// `replay overlay [SESSION|latest|auto] --osr FILE --out FILE [--width W] [--height H] [--fps N]
 /// [--start-ms S] [--duration-ms D] [--preroll-ms P] [--bar-speed PX] [--font FILE] [--ffmpeg BIN]
-/// [--json-only]`
+/// [--show-depth] [--json-only]`
 pub fn run(out: &mut dyn Write, dirs: &Dirs, rest: &[&str]) -> Result<(), String> {
     let mut a = Args::new(rest);
     let osr_path = a
@@ -143,6 +143,7 @@ pub fn run(out: &mut dyn Write, dirs: &Dirs, rest: &[&str]) -> Result<(), String
     let font_path = a.opt("--font")?.map(PathBuf::from);
     let ffmpeg = a.opt("--ffmpeg")?.unwrap_or("ffmpeg").to_string();
     let json_only = a.flag("--json-only");
+    let show_depth = a.flag("--show-depth");
     let which = match a.positional()?.as_slice() {
         [] => "auto",
         [s] => s,
@@ -193,6 +194,7 @@ pub fn run(out: &mut dyn Write, dirs: &Dirs, rest: &[&str]) -> Result<(), String
         width,
         height,
         bar_speed: bar_speed.map(|v| v as f32),
+        show_depth,
     };
     let scene = Scene::new(data)?;
     let raw = out_path == Path::new("-");
