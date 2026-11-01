@@ -5,6 +5,7 @@ mod keys;
 mod light;
 mod macro_text;
 mod render;
+mod replay;
 mod signal;
 #[cfg(test)]
 mod tests;
@@ -50,9 +51,10 @@ actuation
   pollrate [1|2|4|8]            show or set the poll rate in kHz (the keyboard restarts)
   travel [KEYS] [--raw] [--seconds N]
                                 live key depth on a keyboard map; Ctrl-C stops
-  feed [--keys KEYS] [--depth-hz N]
+  feed [--keys KEYS] [--depth-hz N] [--record [DIR] [--label TEXT]]
                                 live key depth and press/release as JSON lines for other programs
-                                (docs/feed.md); waits for the keyboard, SIGINT/SIGTERM stop
+                                (docs/feed.md); waits for the keyboard, SIGINT/SIGTERM stop;
+                                --record also saves every raw sample to a session file
   calibrate --yes               any-key calibration: press every key fully, Enter finishes
   reset triggers --yes          every key's actuation and rapid trigger back to factory
   reset factory --yes           factory reset of the whole keyboard
@@ -93,7 +95,15 @@ lighting
   light custom [show] [SLOT]    per-key colours of a custom slot
   light custom set KEYS #rrggbb [--slot 0|1]
   light slot [0|1]              show or select the custom slot the custom effect shows
-  light music on|off            music-rhythm mode (needs the vendor desktop plugin to animate)";
+  light music on|off            music-rhythm mode (needs the vendor desktop plugin to animate)
+
+replay (osu! replays vs recorded feed sessions; no keyboard needed)
+  replay sessions [--limit N]   recorded sessions, newest first
+  replay match [--exports DIR] [--limit N]
+                                exported .osr files that belong to each session
+                                (default DIR ~/.local/share/osu/exports)
+  replay report [SESSION|latest] [--osr FILE] [--exports DIR] [--open]
+                                align a replay with a session and write an HTML report";
 
 /// What `run` does after a command.
 #[derive(Debug, PartialEq, Eq)]
@@ -192,6 +202,9 @@ fn run(mut args: Vec<String>) -> Result<(), String> {
         [] | ["-h" | "--help" | "help"] => return say(&mut stdout, USAGE),
         ["list"] => return cmd_list(&mut stdout),
         ["keymap", "codes", rest @ ..] => return keys::codes(&mut stdout, rest),
+        ["replay", rest @ ..] => {
+            return replay::run(&mut stdout, &replay::Dirs::default(), rest)
+        }
         ["feed", rest @ ..] => {
             drop(stdout);
             return feed::run(device, rest);

@@ -3,9 +3,10 @@
 
 use crate::args::{parse_num, Args};
 use crate::{bad_args, put, select_device, signal, wanted_node};
-use aula_core::feed::{self, DepthCoalescer, KeyState, Line, Status};
+use aula_core::feed::{self, DepthCoalescer, Hello, KeyState, Line, Status};
 use aula_core::hidraw::{self, Device, Link};
 use aula_core::layout;
+use aula_core::session;
 use aula_core::perkey::key_name;
 use aula_core::{Error, Keyboard};
 use std::collections::BTreeMap;
@@ -27,24 +28,161 @@ pub struct Options {
     pub keys: Vec<usize>,
     /// Depth updates per key and second; 0 = none.
     pub depth_hz: u32,
+    /// `--record [DIR]`: record a session file (None inside: the default sessions directory).
+    pub record: Option<Option<PathBuf>>,
+    pub label: String,
 }
 
 pub fn parse_options(rest: &[&str]) -> Result<Options, String> {
-    let mut a = Args::new(rest);
+    let mut items = rest.to_vec();
+    let record = take_record(&mut items)?;
+    let mut a = Args::new(&items);
     let keys = a.opt("--keys")?;
     let depth_hz = a
         .opt("--depth-hz")?
         .map(|s| parse_num(s, 0..=1000, "depth rate in Hz"))
         .transpose()?
         .unwrap_or(DEFAULT_DEPTH_HZ);
+    let label = a.opt("--label")?;
     if !a.positional()?.is_empty() {
         return Err(bad_args(&[&["feed"], rest].concat()));
+    }
+    if label.is_some() && record.is_none() {
+        return Err("--label needs --record".into());
     }
     let keys = match keys {
         Some(s) => layout::select(s)?,
         None => layout::all_indices(),
     };
-    Ok(Options { keys, depth_hz })
+    Ok(Options {
+        keys,
+        depth_hz,
+        record,
+        label: session::clean_label(label.unwrap_or("")),
+    })
+}
+
+/// Takes `--record`, `--record DIR` or `--record=DIR` out of `items` (DIR is the next item unless it starts
+/// with `--`).
+fn take_record(items: &mut Vec<&str>) -> Result<Option<Option<PathBuf>>, String> {
+    let mut found = None;
+    let mut i = 0;
+    while i < items.len() {
+        let value = if items[i] == "--record" {
+            items.remove(i);
+            match items.get(i) {
+                Some(v) if !v.starts_with("--") => Some(PathBuf::from(items.remove(i))),
+                _ => None,
+            }
+        } else if let Some(v) = items[i].strip_prefix("--record=") {
+            if v.is_empty() {
+                return Err("--record= needs a directory".into());
+            }
+            let v = PathBuf::from(v);
+            items.remove(i);
+            Some(v)
+        } else {
+            i += 1;
+            continue;
+        };
+        if found.replace(value).is_some() {
+            return Err("--record given twice".into());
+        }
+    }
+    Ok(found)
+}
+
+/// The session file of `feed --record`: created at the first `hello`, written as samples come, finished when
+/// the feed ends. A write error ends the recording (reported once on stderr), never the feed.
+pub struct Recorder {
+    dir: PathBuf,
+    label: String,
+    start_unix_ms: u64,
+    start_mono_ms: f64,
+    writer: Option<session::Writer>,
+    failed: bool,
+}
+
+impl Recorder {
+    /// A recording into `dir` whose `t` 0 is wall clock `start_unix_ms` / CLOCK_MONOTONIC `start_mono_ms`.
+    pub fn new(dir: PathBuf, label: String, start_unix_ms: u64, start_mono_ms: f64) -> Self {
+        Recorder {
+            dir,
+            label,
+            start_unix_ms,
+            start_mono_ms,
+            writer: None,
+            failed: false,
+        }
+    }
+
+    /// The session file, once created.
+    #[cfg(test)]
+    pub fn path(&self) -> Option<&std::path::Path> {
+        self.writer.as_ref().map(|w| w.path())
+    }
+
+    fn check(&mut self, r: aula_core::Result<()>) {
+        if let Err(e) = r {
+            eprintln!("aulactl feed: recording stopped: {e}");
+            self.failed = true;
+            // the gzip stream is completed if the file still takes it
+            if let Some(mut w) = self.writer.take() {
+                let _ = w.finish();
+            }
+        }
+    }
+
+    fn hello(&mut self, hello: &Hello) {
+        if self.failed {
+            return;
+        }
+        let r = match self.writer.as_mut() {
+            Some(w) => w.hello(hello),
+            None => self.create(hello),
+        };
+        self.check(r);
+    }
+
+    fn create(&mut self, hello: &Hello) -> aula_core::Result<()> {
+        let header = session::Header {
+            schema: session::SCHEMA,
+            label: self.label.clone(),
+            start_unix_ms: self.start_unix_ms,
+            start_mono_ms: self.start_mono_ms,
+            product: hello.product.clone(),
+            firmware: hello.firmware.clone(),
+            max_mm: hello.max_mm,
+            keys: hello.keys.iter().map(session::SessionKey::from).collect(),
+        };
+        let w = session::Writer::create(&self.dir, &header)?;
+        eprintln!("aulactl feed: recording to {}", w.path().display());
+        let current = w.path().to_path_buf();
+        self.writer = Some(w);
+        session::prune(
+            &self.dir,
+            session::KEEP_SESSIONS,
+            session::KEEP_BYTES,
+            Some(&current),
+        )
+        .map(|_| ())
+    }
+
+    fn with(&mut self, f: impl FnOnce(&mut session::Writer) -> aula_core::Result<()>) {
+        if let Some(w) = self.writer.as_mut() {
+            let r = f(w);
+            self.check(r);
+        }
+    }
+
+    /// Completes the file (end of the feed).
+    pub fn finish(&mut self) {
+        if let Some(mut w) = self.writer.take() {
+            if let Err(e) = w.finish() {
+                eprintln!("aulactl feed: finishing the recording: {e}");
+            }
+        }
+    }
 }
 
 /// `aulactl feed`: runs until SIGINT/SIGTERM (Ok) or a fatal error, which is also written as an `error` line.
@@ -62,8 +200,40 @@ pub fn run(device: Option<PathBuf>, rest: &[&str]) -> Result<(), String> {
 fn run_to(out: &mut dyn Write, device: Option<PathBuf>, rest: &[&str]) -> Result<(), String> {
     let opts = parse_options(rest)?;
     signal::install()?;
-    let wanted = wanted_node(device);
     let start = Instant::now();
+    let mut rec = match &opts.record {
+        Some(dir) => {
+            let dir = match dir {
+                Some(d) => d.clone(),
+                None => session::sessions_dir()?,
+            };
+            let unix_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis() as u64);
+            Some(Recorder::new(
+                dir,
+                opts.label.clone(),
+                unix_ms,
+                session::monotonic_ms(),
+            ))
+        }
+        None => None,
+    };
+    let r = connect_loop(out, wanted_node(device), &opts, start, &mut rec);
+    if let Some(rec) = &mut rec {
+        rec.finish();
+    }
+    r
+}
+
+/// Connects, streams, and waits again until stopped.
+fn connect_loop(
+    out: &mut dyn Write,
+    wanted: Option<PathBuf>,
+    opts: &Options,
+    start: Instant,
+    rec: &mut Option<Recorder>,
+) -> Result<(), String> {
     let mut shown: Option<Status> = None;
     let mut reported: Option<String> = None;
     loop {
@@ -71,7 +241,7 @@ fn run_to(out: &mut dyn Write, device: Option<PathBuf>, rest: &[&str]) -> Result
             return Ok(());
         }
         let status = match connect(wanted.as_deref()) {
-            Ok(mut kb) => match session(&mut kb, &opts, out, start, &mut signal::interrupted)? {
+            Ok(mut kb) => match session(&mut kb, opts, out, start, rec, &mut signal::interrupted)? {
                 End::Stopped => return Ok(()),
                 End::Lost => {
                     emit(out, &Line::status(Status::Lost))?;
@@ -141,6 +311,7 @@ pub fn session<L: Link>(
     opts: &Options,
     out: &mut dyn Write,
     start: Instant,
+    rec: &mut Option<Recorder>,
     stop: &mut dyn FnMut() -> bool,
 ) -> Result<End, String> {
     if !kb.is_supported() {
@@ -171,6 +342,9 @@ pub fn session<L: Link>(
     let ms = || start.elapsed().as_secs_f64() * 1000.0;
     let mut lost = false;
     let mut written = emit(out, &Line::Hello(&hello));
+    if let Some(r) = rec.as_mut() {
+        r.hello(&hello);
+    }
     while written.is_ok() && !stop() {
         let wait = depth
             .next_due(ms())
@@ -185,10 +359,16 @@ pub fn session<L: Link>(
                 let Some((name, state)) = keys.get_mut(&s.index) else {
                     continue;
                 };
+                if let Some(r) = rec.as_mut() {
+                    r.with(|w| w.depth(t, name, limits.to_mm(s.depth)));
+                }
                 if let Some(d) = depth.sample(s.index, t, s.depth) {
                     written = emit(out, &Line::depth(t, name, feed::mm(&limits, d)));
                 }
                 if let Some(edge) = state.update(s.depth) {
+                    if let Some(r) = rec.as_mut() {
+                        r.with(|w| w.edge(t, name, edge));
+                    }
                     written = written.and_then(|_| emit(out, &Line::edge(t, name, edge)));
                 }
             }
@@ -205,6 +385,10 @@ pub fn session<L: Link>(
     if lost {
         // the board is gone: the close cannot be acknowledged
         let _ = stream.close();
+        if let Some(r) = rec.as_mut() {
+            let t = ms();
+            r.with(|w| w.lost(t).and_then(|_| w.flush()));
+        }
         return Ok(End::Lost);
     }
     if let Err(e) = written {
@@ -275,6 +459,8 @@ mod tests {
         Options {
             keys: vec![idx("KeyZ"), idx("KeyX")],
             depth_hz: hz,
+            record: None,
+            label: String::new(),
         }
     }
 
@@ -310,6 +496,7 @@ mod tests {
             &opts(1000),
             &mut out,
             Instant::now(),
+            &mut None,
             &mut stop_after(20),
         )
         .unwrap();
@@ -368,6 +555,7 @@ mod tests {
             &opts(0),
             &mut out,
             Instant::now(),
+            &mut None,
             &mut stop_after(20),
         )
         .unwrap();
@@ -379,7 +567,7 @@ mod tests {
         let mut kb = board(false);
         let mut out = Vec::new();
         assert_eq!(
-            session(&mut kb, &opts(120), &mut out, Instant::now(), &mut || true).unwrap(),
+            session(&mut kb, &opts(120), &mut out, Instant::now(), &mut None, &mut || true).unwrap(),
             End::Stopped
         );
         assert_eq!(types(&lines(&out)), ["hello"]);
@@ -395,6 +583,7 @@ mod tests {
             &opts(1000),
             &mut out,
             Instant::now(),
+            &mut None,
             &mut stop_after(1000),
         )
         .unwrap();
@@ -418,7 +607,7 @@ mod tests {
         sim.mute_cmd = Some(0x21);
         let mut kb = Keyboard::with_link(sim).unwrap();
         let mut out = Vec::new();
-        let end = session(&mut kb, &opts(120), &mut out, Instant::now(), &mut || false).unwrap();
+        let end = session(&mut kb, &opts(120), &mut out, Instant::now(), &mut None, &mut || false).unwrap();
         assert!(matches!(end, End::NotReady(Error::Timeout(_))), "{end:?}");
         assert!(out.is_empty(), "no hello");
         assert!(
@@ -431,7 +620,7 @@ mod tests {
     fn other_boards_are_refused() {
         let mut kb = Keyboard::with_link(SimKeyboard::other_board()).unwrap();
         let mut out = Vec::new();
-        let e = session(&mut kb, &opts(120), &mut out, Instant::now(), &mut || false).unwrap_err();
+        let e = session(&mut kb, &opts(120), &mut out, Instant::now(), &mut None, &mut || false).unwrap_err();
         assert!(e.contains("unsupported board"), "{e}");
         assert!(out.is_empty());
     }
@@ -455,6 +644,7 @@ mod tests {
             &opts(120),
             &mut ClosedPipe,
             Instant::now(),
+            &mut None,
             &mut || false,
         )
         .unwrap_err();
@@ -472,7 +662,9 @@ mod tests {
             parse_options(&[]).unwrap(),
             Options {
                 keys: layout::all_indices(),
-                depth_hz: 120
+                depth_hz: 120,
+                record: None,
+                label: String::new(),
             }
         );
         let o = parse_options(&["--keys", "KeyZ,KeyX", "--depth-hz", "0"]).unwrap();
@@ -480,7 +672,9 @@ mod tests {
             o,
             Options {
                 keys: layout::select("KeyX,KeyZ").unwrap(),
-                depth_hz: 0
+                depth_hz: 0,
+                record: None,
+                label: String::new(),
             }
         );
         assert_eq!(
@@ -493,6 +687,149 @@ mod tests {
         assert!(parse_options(&["--keys", ""]).is_err());
         assert!(parse_options(&["--keys", "nope"]).is_err());
         assert!(parse_options(&["KeyZ"]).is_err());
+    }
+
+    #[test]
+    fn record_options() {
+        let o = parse_options(&["--record", "--label", " map [x]\n"]).unwrap();
+        assert_eq!(o.record, Some(None));
+        assert_eq!(o.label, "map [x]");
+        let o = parse_options(&["--record", "/tmp/s", "--keys", "KeyZ"]).unwrap();
+        assert_eq!(o.record, Some(Some(PathBuf::from("/tmp/s"))));
+        assert_eq!(o.keys, vec![idx("KeyZ")]);
+        let o = parse_options(&["--keys", "KeyZ", "--record"]).unwrap();
+        assert_eq!(o.record, Some(None), "--record last");
+        let o = parse_options(&["--record=/tmp/s"]).unwrap();
+        assert_eq!(o.record, Some(Some(PathBuf::from("/tmp/s"))));
+        assert!(parse_options(&["--record="]).is_err());
+        assert!(parse_options(&["--record", "--record"]).is_err());
+        assert_eq!(
+            parse_options(&["--label", "x"]).unwrap_err(),
+            "--label needs --record"
+        );
+        assert!(parse_options(&["--record", "a", "b"]).is_err(), "one DIR");
+        assert_eq!(parse_options(&[]).unwrap().record, None);
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "aulactl-cli-test-{}-feed-{tag}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&d);
+        d
+    }
+
+    #[test]
+    fn record_writes_every_sample_and_finishes_the_file() {
+        let dir = scratch("record");
+        let mut rec = Some(Recorder::new(
+            dir.clone(),
+            "Artist - Title [Hard]".into(),
+            1_793_491_200_000,
+            42.0,
+        ));
+        let mut kb = board(false);
+        let mut out = Vec::new();
+        let end = session(
+            &mut kb,
+            &opts(1),
+            &mut out,
+            Instant::now(),
+            &mut rec,
+            &mut stop_after(20),
+        )
+        .unwrap();
+        assert_eq!(end, End::Stopped);
+        let path = rec.as_ref().unwrap().path().unwrap().to_path_buf();
+        rec.as_mut().unwrap().finish();
+        assert_eq!(
+            path.file_name().unwrap(),
+            "20261101-000000-Artist_-_Title_[Hard].ndjson.gz"
+        );
+        // stdout is unchanged by recording: coalesced at 1 Hz
+        let depths = types(&lines(&out))
+            .iter()
+            .filter(|t| *t == "depth")
+            .count();
+        assert!(depths < 7, "{depths}");
+        let s = aula_core::session::read(&path).unwrap();
+        assert!(!s.truncated);
+        assert_eq!(s.header.label, "Artist - Title [Hard]");
+        assert_eq!(
+            (s.header.start_unix_ms, s.header.start_mono_ms),
+            (1_793_491_200_000, 42.0)
+        );
+        assert_eq!(s.header.product, "SI2825KZHEARGB");
+        let codes: Vec<&str> = s.header.keys.iter().map(|k| k.code.as_str()).collect();
+        assert_eq!(codes, ["KeyZ", "KeyX"]);
+        assert_eq!(s.key("KeyZ").unwrap().mode, "rt");
+        // every raw frame, not coalesced; rest frames as 0
+        let mm: Vec<f64> = s.depth["KeyZ"].iter().map(|d| d.1).collect();
+        assert_eq!(mm, [0.5, 1.5, 3.4, 1.5, 0.3, 0.0, 0.0]);
+        assert!(s.depth["KeyZ"].windows(2).all(|w| w[0].0 <= w[1].0));
+        assert_eq!(s.presses["KeyZ"].len(), 1);
+        assert!(s.presses["KeyZ"][0].1.is_some(), "released");
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!((mode(&dir), mode(&path)), (0o700, 0o600));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn record_survives_unplug_and_reconnect() {
+        let dir = scratch("record-lost");
+        let mut rec = Some(Recorder::new(dir.clone(), String::new(), 0, 0.0));
+        let start = Instant::now();
+        for n in 1..=2 {
+            let mut kb = board(true);
+            let end = session(
+                &mut kb,
+                &opts(120),
+                &mut Vec::new(),
+                start,
+                &mut rec,
+                &mut stop_after(1000),
+            )
+            .unwrap();
+            assert_eq!(end, End::Lost);
+            // flushed at the unplug: readable before the file is finished
+            let path = rec.as_ref().unwrap().path().unwrap().to_path_buf();
+            let s = aula_core::session::read(&path).unwrap();
+            assert_eq!(s.depth["KeyZ"].len(), 7 * n);
+            assert!(s.truncated);
+        }
+        let path = rec.as_ref().unwrap().path().unwrap().to_path_buf();
+        rec.as_mut().unwrap().finish();
+        let s = aula_core::session::read(&path).unwrap();
+        assert_eq!(s.depth["KeyZ"].len(), 14, "one file over both connections");
+        assert_eq!(s.presses["KeyZ"].len(), 2);
+        assert_eq!(path.file_name().unwrap(), "19700101-000000.ndjson.gz");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn record_failure_does_not_stop_the_feed() {
+        let dir = scratch("record-fail");
+        std::fs::create_dir_all(dir.parent().unwrap()).unwrap();
+        // a file where the directory should be
+        std::fs::write(&dir, "").unwrap();
+        let mut rec = Some(Recorder::new(dir.clone(), String::new(), 0, 0.0));
+        let mut kb = board(false);
+        let mut out = Vec::new();
+        let end = session(
+            &mut kb,
+            &opts(0),
+            &mut out,
+            Instant::now(),
+            &mut rec,
+            &mut stop_after(20),
+        )
+        .unwrap();
+        assert_eq!(end, End::Stopped);
+        assert_eq!(types(&lines(&out)), ["hello", "press", "release"]);
+        assert!(rec.as_ref().unwrap().path().is_none());
+        std::fs::remove_file(&dir).unwrap();
     }
 
     #[test]
