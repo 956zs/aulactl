@@ -18,7 +18,7 @@ pub struct Dirs {
 }
 
 impl Dirs {
-    fn sessions(&self) -> Result<PathBuf, String> {
+    pub(crate) fn sessions(&self) -> Result<PathBuf, String> {
         match &self.sessions {
             Some(d) => Ok(d.clone()),
             None => Ok(session::sessions_dir()?),
@@ -38,6 +38,7 @@ pub fn run(out: &mut dyn Write, dirs: &Dirs, rest: &[&str]) -> Result<(), String
         ["sessions", more @ ..] => sessions(out, dirs, more),
         ["match", more @ ..] => matches(out, dirs, more),
         ["report", more @ ..] => report(out, dirs, more),
+        ["overlay", more @ ..] => crate::overlay::run(out, dirs, more),
         _ => Err(bad_args(&[&["replay"], rest].concat())),
     }
 }

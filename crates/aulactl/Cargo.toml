@@ -8,6 +8,8 @@ license.workspace = true
 [dependencies]
 aula-core.workspace = true
 libc.workspace = true
+tiny-skia.workspace = true
+fontdue.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

@@ -1,0 +1,716 @@
+//! Key overlay frames: the overlay at one song time drawn into an RGBA pixmap (pure: same scene, style and
+//! time give the same pixels). Styled after osu! "KeyOverlay": a keycap per recorded key with its live travel
+//! (fill from the top), the actuation point and its press count; a stats line (KPS, peak KPS, tapping BPM);
+//! and a bar per press rising from its key (length = hold time, scrolling up at a constant speed, fading out
+//! at the top), wider and brighter the deeper the press went.
+
+use super::font::{Font, Rgba};
+use aula_core::overlay::{Data, Press};
+use aula_core::report::depth_at;
+use tiny_skia::{
+    Color, FillRule, GradientStop, LinearGradient, Paint, Path, PathBuilder, Pixmap, Point, Rect,
+    SpreadMode, Stroke, Transform,
+};
+
+/// KPS window (real ms).
+const KPS_WINDOW_MS: f64 = 1000.0;
+/// Presses considered for the tapping BPM: within this window (real ms) ...
+const BPM_WINDOW_MS: f64 = 2000.0;
+/// ... the last this many ...
+const BPM_PRESSES: usize = 9;
+/// ... and at least this many.
+const BPM_MIN_PRESSES: usize = 4;
+/// Key colours, cycled.
+const PALETTE: [Rgba; 6] = [
+    [255, 102, 170, 255],
+    [102, 204, 255, 255],
+    [255, 210, 95, 255],
+    [140, 255, 110, 255],
+    [190, 140, 255, 255],
+    [255, 150, 90, 255],
+];
+
+/// Canvas and motion settings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Style {
+    pub width: u32,
+    pub height: u32,
+    /// Bar scroll speed in px per real second; None = the bar area's height in 1.2 s.
+    pub bar_speed: Option<f32>,
+}
+
+/// Overlay data with the lookups the frames need (sorted press times, running peak KPS).
+pub struct Scene {
+    pub data: Data,
+    /// Every key's press times (song ms), sorted.
+    downs: Vec<f64>,
+    /// KPS reached at each of `downs`, running maximum.
+    peak_kps: Vec<u32>,
+    /// Longest hold (song ms), for the bar search.
+    max_hold: f64,
+}
+
+impl Scene {
+    pub fn new(data: Data) -> Result<Scene, String> {
+        if !(data.rate.is_finite() && data.rate > 0.0) {
+            return Err(format!("bad song rate {}", data.rate));
+        }
+        if !(data.max_mm.is_finite() && data.max_mm > 0.0) {
+            return Err(format!("bad travel range {} mm", data.max_mm));
+        }
+        let mut downs: Vec<f64> = data
+            .keys
+            .iter()
+            .flat_map(|k| k.presses.iter().map(|p| p.down))
+            .filter(|t| t.is_finite())
+            .collect();
+        downs.sort_by(f64::total_cmp);
+        let window = KPS_WINDOW_MS * data.rate;
+        let mut peak = 0;
+        let mut from = 0;
+        let peak_kps = downs
+            .iter()
+            .enumerate()
+            .map(|(i, &t)| {
+                while downs[from] <= t - window {
+                    from += 1;
+                }
+                peak = peak.max((i + 1 - from) as u32);
+                peak
+            })
+            .collect();
+        let max_hold = data
+            .keys
+            .iter()
+            .flat_map(|k| &k.presses)
+            .filter_map(|p| p.up.map(|u| u - p.down))
+            .filter(|h| h.is_finite())
+            .fold(0.0, f64::max);
+        Ok(Scene {
+            data,
+            downs,
+            peak_kps,
+            max_hold,
+        })
+    }
+
+    /// Presses in the last second (real time) up to song time `t`.
+    pub fn kps(&self, t: f64) -> u32 {
+        let hi = self.downs.partition_point(|&d| d <= t);
+        let lo = self
+            .downs
+            .partition_point(|&d| d <= t - KPS_WINDOW_MS * self.data.rate);
+        (hi - lo) as u32
+    }
+
+    /// Highest KPS reached up to song time `t`.
+    pub fn peak_kps(&self, t: f64) -> u32 {
+        match self.downs.partition_point(|&d| d <= t) {
+            0 => 0,
+            i => self.peak_kps[i - 1],
+        }
+    }
+
+    /// Tapping speed as 1/4-note BPM (15000 / median interval between the recent presses of all keys, real
+    /// ms); None when fewer than 4 presses came in the last 2 s.
+    pub fn bpm(&self, t: f64) -> Option<f64> {
+        let hi = self.downs.partition_point(|&d| d <= t);
+        let lo = self
+            .downs
+            .partition_point(|&d| d <= t - BPM_WINDOW_MS * self.data.rate)
+            .max(hi.saturating_sub(BPM_PRESSES));
+        if hi - lo < BPM_MIN_PRESSES {
+            return None;
+        }
+        let mut gaps: Vec<f64> = self.downs[lo..hi]
+            .windows(2)
+            .map(|w| (w[1] - w[0]) / self.data.rate)
+            .collect();
+        gaps.sort_by(f64::total_cmp);
+        let median = gaps[gaps.len() / 2];
+        (median > 0.0).then(|| 15_000.0 / median)
+    }
+
+    /// Travel (mm) of key `k` at song time `t`.
+    pub fn depth(&self, k: usize, t: f64) -> f64 {
+        self.data
+            .keys
+            .get(k)
+            .map_or(0.0, |key| depth_at(&key.depth, t))
+    }
+
+    /// Presses of key `k` up to song time `t`.
+    pub fn count(&self, k: usize, t: f64) -> usize {
+        self.data
+            .keys
+            .get(k)
+            .map_or(0, |key| key.presses.partition_point(|p| p.down <= t))
+    }
+
+    /// Whether key `k` is held at song time `t`.
+    pub fn held(&self, k: usize, t: f64) -> bool {
+        let Some(key) = self.data.keys.get(k) else {
+            return false;
+        };
+        let i = key.presses.partition_point(|p| p.down <= t);
+        i > 0 && key.presses[i - 1].up.is_none_or(|u| u > t)
+    }
+
+    /// Deepest travel of a press up to song time `t` (the whole press once it is released).
+    fn peak_so_far(&self, k: usize, p: &Press, t: f64) -> f64 {
+        if p.up.is_some_and(|u| u <= t) {
+            return p.peak;
+        }
+        let d = &self.data.keys[k].depth;
+        let lo = d.partition_point(|s| s.0 <= p.down);
+        let hi = d.partition_point(|s| s.0 <= t);
+        d[lo..hi.max(lo)]
+            .iter()
+            .map(|s| s.1)
+            .fold(depth_at(d, p.down), f64::max)
+    }
+}
+
+/// Where things go on the canvas.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Layout {
+    /// Keycap size (square).
+    pub key: f32,
+    pub gap: f32,
+    /// Left edge of the first keycap.
+    pub x0: f32,
+    /// Top of the keycaps.
+    pub key_top: f32,
+    /// Bars live between these (bars start at `bar_base`).
+    pub bar_top: f32,
+    pub bar_base: f32,
+    /// Bars are fully faded at `bar_top` and opaque below `fade_end`.
+    pub fade_end: f32,
+    /// Middle of the stats line and its text size.
+    pub stats_y: f32,
+    pub stats_size: f32,
+    /// Bar speed, px per real ms.
+    pub speed: f32,
+}
+
+impl Layout {
+    pub fn new(style: &Style, keys: usize) -> Layout {
+        let (w, h) = (style.width as f32, style.height as f32);
+        let n = keys.max(1) as f32;
+        let margin = (w.min(h) * 0.04).max(2.0);
+        let gap = margin * 0.6;
+        let key = ((w - 2.0 * margin - (n - 1.0) * gap) / n)
+            .min(h * 0.22)
+            .max(4.0);
+        let x0 = (w - (n * key + (n - 1.0) * gap)) / 2.0;
+        let stats_size = (key * 0.2).clamp(8.0, 64.0);
+        let stats_h = stats_size * 1.8;
+        let key_top = h - margin - stats_h - key;
+        let bar_base = key_top - gap;
+        let bar_top = margin.min(bar_base);
+        let fade_end = bar_top + (bar_base - bar_top) * 0.35;
+        let speed = style
+            .bar_speed
+            .map_or((bar_base - bar_top) / 1200.0, |s| s / 1000.0);
+        Layout {
+            key,
+            gap,
+            x0,
+            key_top,
+            bar_top,
+            bar_base,
+            fade_end,
+            stats_y: h - margin - stats_h / 2.0,
+            stats_size,
+            speed,
+        }
+    }
+
+    /// Left edge of keycap `i`.
+    pub fn key_x(&self, i: usize) -> f32 {
+        self.x0 + i as f32 * (self.key + self.gap)
+    }
+}
+
+fn paint(c: Rgba) -> Paint<'static> {
+    let mut p = Paint::default();
+    p.set_color_rgba8(c[0], c[1], c[2], c[3]);
+    p.anti_alias = true;
+    p
+}
+
+fn with_alpha(c: Rgba, a: f64) -> Rgba {
+    [
+        c[0],
+        c[1],
+        c[2],
+        (c[3] as f64 * a.clamp(0.0, 1.0)).round() as u8,
+    ]
+}
+
+/// `c` moved towards white by `f` (0..1).
+fn lighten(c: Rgba, f: f64) -> Rgba {
+    let f = f.clamp(0.0, 1.0);
+    let l = |v: u8| (v as f64 + (255.0 - v as f64) * f).round() as u8;
+    [l(c[0]), l(c[1]), l(c[2]), c[3]]
+}
+
+fn rounded_rect(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<Path> {
+    let r = r.min(w / 2.0).min(h / 2.0).max(0.0);
+    let mut pb = PathBuilder::new();
+    pb.move_to(x + r, y);
+    pb.line_to(x + w - r, y);
+    pb.quad_to(x + w, y, x + w, y + r);
+    pb.line_to(x + w, y + h - r);
+    pb.quad_to(x + w, y + h, x + w - r, y + h);
+    pb.line_to(x + r, y + h);
+    pb.quad_to(x, y + h, x, y + h - r);
+    pb.line_to(x, y + r);
+    pb.quad_to(x, y, x + r, y);
+    pb.close();
+    pb.finish()
+}
+
+fn colour_of(i: usize) -> Rgba {
+    PALETTE[i % PALETTE.len()]
+}
+
+/// Draws the overlay at song time `t` into `pm` (cleared first). `pm` must be `style.width` × `style.height`.
+pub fn render(scene: &Scene, style: &Style, font: &mut Font, t: f64, pm: &mut Pixmap) {
+    pm.fill(Color::TRANSPARENT);
+    let l = Layout::new(style, scene.data.keys.len());
+    let max_mm = scene.data.max_mm;
+    for k in 0..scene.data.keys.len() {
+        draw_bars(scene, &l, k, t, pm);
+    }
+    for k in 0..scene.data.keys.len() {
+        draw_key(scene, &l, font, k, t, pm, max_mm);
+    }
+    let bpm = scene
+        .bpm(t)
+        .map_or_else(|| "-".to_string(), |b| format!("{:.0}", b));
+    let stats = format!(
+        "KPS {}   MAX {}   BPM {}",
+        scene.kps(t),
+        scene.peak_kps(t),
+        bpm
+    );
+    let mut size = l.stats_size;
+    let room = style.width as f32 * 0.96;
+    let w = font.width(&stats, size);
+    if w > room {
+        size *= room / w;
+    }
+    font.draw(
+        pm,
+        &stats,
+        style.width as f32 / 2.0,
+        l.stats_y,
+        size,
+        [240, 240, 245, 235],
+    );
+}
+
+fn draw_bars(scene: &Scene, l: &Layout, k: usize, t: f64, pm: &mut Pixmap) {
+    let key = &scene.data.keys[k];
+    let rate = scene.data.rate;
+    let colour = colour_of(k);
+    let cx = l.key_x(k) + l.key / 2.0;
+    // a bar has scrolled away when its bottom passed the top
+    let travel_ms = ((l.bar_base - l.bar_top) / l.speed.max(1e-6)) as f64 * rate;
+    let first = key
+        .presses
+        .partition_point(|p| p.down < t - travel_ms - scene.max_hold);
+    let last = key.presses.partition_point(|p| p.down <= t);
+    for p in &key.presses[first..last] {
+        let y_top = l.bar_base - ((t - p.down) / rate) as f32 * l.speed;
+        let y_bottom = match p.up {
+            Some(u) if u <= t => l.bar_base - ((t - u) / rate) as f32 * l.speed,
+            _ => l.bar_base,
+        };
+        if y_bottom <= l.bar_top {
+            continue;
+        }
+        let y_top = y_top.max(l.bar_top);
+        let height = (y_bottom - y_top).max(2.0);
+        let f = (scene.peak_so_far(k, p, t) / scene.data.max_mm).clamp(0.0, 1.0);
+        let width = l.key * (0.3 + 0.55 * f as f32);
+        let c = with_alpha(lighten(colour, f * 0.35), 0.45 + 0.55 * f);
+        let Some(rect) = Rect::from_xywh(cx - width / 2.0, y_bottom - height, width, height) else {
+            continue;
+        };
+        let mut paint = paint(c);
+        if y_top < l.fade_end {
+            let clear = Color::from_rgba8(c[0], c[1], c[2], 0);
+            let solid = Color::from_rgba8(c[0], c[1], c[2], c[3]);
+            if let Some(shader) = LinearGradient::new(
+                Point::from_xy(0.0, l.bar_top),
+                Point::from_xy(0.0, l.fade_end),
+                vec![GradientStop::new(0.0, clear), GradientStop::new(1.0, solid)],
+                SpreadMode::Pad,
+                Transform::identity(),
+            ) {
+                paint.shader = shader;
+            }
+        }
+        if let Some(path) = rounded_rect(
+            rect.x(),
+            rect.y(),
+            rect.width(),
+            rect.height(),
+            width * 0.12,
+        ) {
+            pm.fill_path(
+                &path,
+                &paint,
+                FillRule::Winding,
+                Transform::identity(),
+                None,
+            );
+        }
+    }
+}
+
+fn draw_key(
+    scene: &Scene,
+    l: &Layout,
+    font: &mut Font,
+    k: usize,
+    t: f64,
+    pm: &mut Pixmap,
+    max_mm: f64,
+) {
+    let key = &scene.data.keys[k];
+    let colour = colour_of(k);
+    let (x, y, s) = (l.key_x(k), l.key_top, l.key);
+    let held = scene.held(k, t);
+    let depth = scene.depth(k, t).clamp(0.0, max_mm);
+    let radius = s * 0.14;
+    if let Some(body) = rounded_rect(x, y, s, s, radius) {
+        pm.fill_path(
+            &body,
+            &paint([16, 16, 24, 180]),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+    }
+    // travel: fills from the top as the key goes down
+    let inset = s * 0.08;
+    let (ix, iy, iw, ih) = (x + inset, y + inset, s - 2.0 * inset, s - 2.0 * inset);
+    let fill_h = ih * (depth / max_mm) as f32;
+    if fill_h > 0.5 {
+        if let Some(fill) = rounded_rect(ix, iy, iw, fill_h, radius * 0.6) {
+            let c = with_alpha(colour, if held { 0.85 } else { 0.5 });
+            pm.fill_path(
+                &fill,
+                &paint(c),
+                FillRule::Winding,
+                Transform::identity(),
+                None,
+            );
+        }
+    }
+    // actuation point
+    let ay = iy + ih * (key.point / max_mm).clamp(0.0, 1.0) as f32;
+    let mut tick = PathBuilder::new();
+    tick.move_to(x + inset * 0.3, ay);
+    tick.line_to(x + s - inset * 0.3, ay);
+    if let Some(tick) = tick.finish() {
+        let stroke = Stroke {
+            width: (s * 0.02).max(1.0),
+            ..Stroke::default()
+        };
+        pm.stroke_path(
+            &tick,
+            &paint([255, 255, 255, 170]),
+            &stroke,
+            Transform::identity(),
+            None,
+        );
+    }
+    if let Some(body) = rounded_rect(x, y, s, s, radius) {
+        let stroke = Stroke {
+            width: (s * 0.035).max(1.0),
+            ..Stroke::default()
+        };
+        let c = if held { colour } else { [255, 255, 255, 110] };
+        pm.stroke_path(&body, &paint(c), &stroke, Transform::identity(), None);
+    }
+    let label = if key.label.is_empty() {
+        &key.code
+    } else {
+        &key.label
+    };
+    let mut size = s * 0.34;
+    let w = font.width(label, size);
+    if w > s * 0.8 {
+        size *= s * 0.8 / w;
+    }
+    font.draw(
+        pm,
+        label,
+        x + s / 2.0,
+        y + s * 0.45,
+        size,
+        [255, 255, 255, 245],
+    );
+    font.draw(
+        pm,
+        &scene.count(k, t).to_string(),
+        x + s / 2.0,
+        y + s * 0.78,
+        s * 0.16,
+        [235, 235, 240, 210],
+    );
+    font.draw(
+        pm,
+        &format!("{depth:.2}"),
+        x + s / 2.0,
+        y + s * 0.2,
+        s * 0.12,
+        [235, 235, 240, 170],
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aula_core::overlay::{Key, SCHEMA};
+
+    fn press(down: f64, up: f64, peak: f64) -> Press {
+        Press {
+            down,
+            up: Some(up),
+            peak,
+        }
+    }
+
+    fn key(code: &str, presses: Vec<Press>) -> Key {
+        let mut depth = Vec::new();
+        for p in &presses {
+            depth.push((p.down, 1.2));
+            depth.push((p.down + 5.0, p.peak));
+            depth.push((p.up.unwrap(), 0.0));
+        }
+        Key {
+            code: code.into(),
+            label: code[3..].into(),
+            input: "K1/M1".into(),
+            mode: "rt".into(),
+            point: 1.0,
+            presses,
+            depth,
+        }
+    }
+
+    fn data(keys: Vec<Key>, rate: f64) -> Data {
+        Data {
+            schema: SCHEMA,
+            session_file: "s".into(),
+            replay_file: "r".into(),
+            rate,
+            offset_ms: 0.0,
+            matched: 0,
+            replay_downs: 0,
+            match_rate: 1.0,
+            residual_median_ms: 0.0,
+            max_mm: 3.4,
+            replay_range: (0.0, 10_000.0),
+            keys,
+        }
+    }
+
+    /// Z and X alternate from 1000 ms, one press every 125 ms song time (Z 3.4 mm deep, X 1.7 mm).
+    fn stream(rate: f64) -> Scene {
+        let z = (0..10)
+            .map(|i| press(1000.0 + i as f64 * 250.0, 1040.0 + i as f64 * 250.0, 3.4))
+            .collect();
+        let x = (0..10)
+            .map(|i| press(1125.0 + i as f64 * 250.0, 1160.0 + i as f64 * 250.0, 1.7))
+            .collect();
+        Scene::new(data(vec![key("KeyZ", z), key("KeyX", x)], rate)).unwrap()
+    }
+
+    fn style() -> Style {
+        Style {
+            width: 200,
+            height: 300,
+            bar_speed: None,
+        }
+    }
+
+    fn render_at(scene: &Scene, t: f64) -> Pixmap {
+        let st = style();
+        let mut pm = Pixmap::new(st.width, st.height).unwrap();
+        render(scene, &st, &mut Font::Pixel, t, &mut pm);
+        pm
+    }
+
+    fn alpha_in(pm: &Pixmap, x0: u32, y0: u32, x1: u32, y1: u32) -> u64 {
+        let mut s = 0;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                s += pm.pixel(x, y).unwrap().alpha() as u64;
+            }
+        }
+        s
+    }
+
+    #[test]
+    fn stats_follow_the_presses() {
+        let s = stream(1.0);
+        assert_eq!(s.kps(0.0), 0);
+        assert_eq!(s.bpm(0.0), None);
+        // presses every 125 ms: 8 in a second, 1/4 BPM = 15000 / 125 = 120
+        assert_eq!(s.kps(2400.0), 8);
+        assert_eq!(s.bpm(2400.0).map(f64::round), Some(120.0));
+        assert_eq!(s.peak_kps(2400.0), 8);
+        // after the stream: KPS drops, the peak stays, BPM gone after 2 s
+        assert_eq!(s.kps(10_000.0), 0);
+        assert_eq!(s.peak_kps(10_000.0), 8);
+        assert_eq!(s.bpm(10_000.0), None);
+        assert_eq!(s.count(0, 1000.0), 1);
+        assert_eq!(s.count(0, 999.9), 0);
+        assert_eq!(s.count(1, 100_000.0), 10);
+        assert!(s.held(0, 1020.0) && !s.held(0, 1040.0) && !s.held(0, 999.0));
+        assert_eq!(s.depth(0, 1010.0), 3.4);
+        assert_eq!(s.depth(0, 1100.0), 0.0);
+        assert_eq!(s.depth(7, 1100.0), 0.0, "no such key");
+    }
+
+    #[test]
+    fn rate_mods_count_real_time() {
+        // DT: song ms run 1.5x, so a 1 s real window holds 1.5x the song presses
+        let s = stream(1.5);
+        assert_eq!(s.kps(2400.0), 12);
+        assert_eq!(s.bpm(2400.0).map(f64::round), Some(180.0));
+    }
+
+    #[test]
+    fn frame_shows_keys_bars_and_stats() {
+        let s = stream(1.0);
+        let l = Layout::new(&style(), 2);
+        let pm = render_at(&s, 1020.0);
+        let ky = l.key_top as u32;
+        let ks = l.key as u32;
+        let (zx, xx) = (l.key_x(0) as u32, l.key_x(1) as u32);
+        // both keycaps are drawn
+        assert!(alpha_in(&pm, zx, ky, zx + ks, ky + ks) > 0);
+        assert!(alpha_in(&pm, xx, ky, xx + ks, ky + ks) > 0);
+        // Z is held and pressed to the bottom: its keycap shows the fill in its colour
+        let mid = pm
+            .pixel(zx + ks / 2, ky + ks - (l.key * 0.12) as u32)
+            .unwrap()
+            .demultiply();
+        assert!(
+            mid.red() > 200 && mid.green() < 130 && mid.blue() > 120,
+            "{mid:?}"
+        );
+        // a bar rises from Z (20 ms of hold), nothing above X yet
+        let base = l.bar_base as u32;
+        assert!(alpha_in(&pm, zx, base - 6, zx + ks, base) > 0);
+        assert_eq!(alpha_in(&pm, xx, l.bar_top as u32, xx + ks, base), 0);
+        // stats line
+        assert!(alpha_in(&pm, 0, ky + ks, 200, 300) > 0);
+    }
+
+    #[test]
+    fn bars_scroll_up_and_fade_out() {
+        let s = stream(1.0);
+        let l = Layout::new(&style(), 2);
+        let (zx, ks) = (l.key_x(0) as u32, l.key as u32);
+        let column =
+            |pm: &Pixmap, y0: f32, y1: f32| alpha_in(pm, zx, y0 as u32, zx + ks, y1 as u32);
+        // 0.6 s after the last Z press (3250) its bar sits in the middle of the area
+        let pm = render_at(&s, 3850.0);
+        let mid = (l.bar_top + l.bar_base) / 2.0;
+        assert!(column(&pm, mid - 25.0, mid + 25.0) > 0);
+        // at the very top bars are (almost) transparent
+        let pm = render_at(&s, 4470.0);
+        let top = pm.pixel(zx + ks / 2, l.bar_top as u32 + 1).unwrap().alpha();
+        assert!(top < 30, "{top}");
+        // long after: no bars at all
+        let pm = render_at(&s, 20_000.0);
+        assert_eq!(column(&pm, l.bar_top, l.bar_base), 0);
+    }
+
+    #[test]
+    fn deeper_presses_draw_wider_bars() {
+        let s = stream(1.0);
+        let l = Layout::new(&style(), 2);
+        let pm = render_at(&s, 2300.0);
+        let width = |k: usize| {
+            let y = l.bar_base as u32 - 3;
+            (l.key_x(k) as u32..(l.key_x(k) + l.key) as u32)
+                .filter(|&x| pm.pixel(x, y).unwrap().alpha() > 0)
+                .count()
+        };
+        // Z (3.4 mm, pressed at 2250) is held at the base: a full-depth bar
+        assert!(width(0) as f32 >= l.key * 0.8, "{}", width(0));
+        // X (1.7 mm so far) 15 ms after its press: a thin bar at the base
+        let pm = render_at(&s, 2140.0);
+        let y = (l.bar_base - 1.0) as u32;
+        let xw = (l.key_x(1) as u32..(l.key_x(1) + l.key) as u32)
+            .filter(|&x| pm.pixel(x, y).unwrap().alpha() > 0)
+            .count();
+        assert!(xw > 0 && (xw as f32) < l.key * 0.7, "{xw}");
+    }
+
+    #[test]
+    fn empty_scene_draws_only_stats() {
+        let s = Scene::new(data(Vec::new(), 1.0)).unwrap();
+        assert_eq!((s.kps(5.0), s.peak_kps(5.0), s.bpm(5.0)), (0, 0, None));
+        let pm = render_at(&s, 0.0);
+        let l = Layout::new(&style(), 0);
+        assert_eq!(alpha_in(&pm, 0, 0, 200, l.key_top as u32), 0);
+        assert!(alpha_in(&pm, 0, 0, 200, 300) > 0);
+    }
+
+    #[test]
+    fn same_time_same_pixels() {
+        let s = stream(1.0);
+        let a = render_at(&s, 2222.0);
+        let b = render_at(&s, 2222.0);
+        assert_eq!(a.data(), b.data());
+        // and the frame is cleared between calls
+        let st = style();
+        let mut pm = Pixmap::new(st.width, st.height).unwrap();
+        render(&s, &st, &mut Font::Pixel, 1020.0, &mut pm);
+        render(&s, &st, &mut Font::Pixel, 2222.0, &mut pm);
+        assert_eq!(pm.data(), a.data());
+    }
+
+    #[test]
+    fn bad_scenes_are_refused() {
+        assert!(Scene::new(data(Vec::new(), 0.0)).is_err());
+        assert!(Scene::new(data(Vec::new(), f64::NAN)).is_err());
+        let mut d = data(Vec::new(), 1.0);
+        d.max_mm = 0.0;
+        assert!(Scene::new(d).is_err());
+    }
+
+    #[test]
+    fn tiny_canvas_and_held_to_the_end() {
+        let mut z = key("KeyZ", vec![press(100.0, 200.0, 2.0)]);
+        z.presses[0].up = None;
+        let s = Scene::new(data(vec![z], 1.0)).unwrap();
+        assert!(s.held(0, 1e9));
+        let st = Style {
+            width: 8,
+            height: 8,
+            bar_speed: Some(100.0),
+        };
+        let mut pm = Pixmap::new(8, 8).unwrap();
+        render(&s, &st, &mut Font::Pixel, 150.0, &mut pm);
+    }
+
+    #[test]
+    fn colour_helpers() {
+        assert_eq!(lighten([0, 100, 255, 7], 1.0), [255, 255, 255, 7]);
+        assert_eq!(lighten([10, 20, 30, 40], 0.0), [10, 20, 30, 40]);
+        assert_eq!(with_alpha([1, 2, 3, 200], 0.5), [1, 2, 3, 100]);
+        assert_eq!(with_alpha([1, 2, 3, 200], 9.0)[3], 200);
+        assert_eq!(colour_of(6), colour_of(0));
+    }
+}

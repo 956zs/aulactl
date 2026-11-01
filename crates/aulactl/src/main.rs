@@ -4,6 +4,7 @@ mod feed;
 mod keys;
 mod light;
 mod macro_text;
+mod overlay;
 mod render;
 mod replay;
 mod signal;
@@ -103,7 +104,14 @@ replay (osu! replays vs recorded feed sessions; no keyboard needed)
                                 exported .osr files that belong to each session
                                 (default DIR ~/.local/share/osu/exports)
   replay report [SESSION|latest] [--osr FILE] [--exports DIR] [--open]
-                                align a replay with a session and write an HTML report";
+                                align a replay with a session and write an HTML report
+  replay overlay [SESSION|latest|auto] --osr FILE --out FILE.mov|.webm|.mkv|- [--width W] [--height H]
+         [--fps N] [--start-ms S] [--duration-ms D] [--preroll-ms P] [--bar-speed PX] [--font FILE]
+         [--ffmpeg BIN] [--json-only]
+                                transparent key overlay video on the replay's song clock (frame 0 = song
+                                ms S; auto = the session that lines up, exit 3 if none); --json-only
+                                prints the aligned presses and travel instead; --out - writes raw RGBA
+                                frames (W x H, N fps) to stdout";
 
 /// What `run` does after a command.
 #[derive(Debug, PartialEq, Eq)]
@@ -186,6 +194,10 @@ fn main() -> ExitCode {
     match run(std::env::args().skip(1).collect()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) if e == PIPE_CLOSED => ExitCode::SUCCESS,
+        Err(e) if e == overlay::NO_SESSION => {
+            eprintln!("aulactl: {e}");
+            ExitCode::from(overlay::NO_SESSION_EXIT)
+        }
         Err(e) => {
             eprintln!("aulactl: {e}");
             ExitCode::FAILURE
