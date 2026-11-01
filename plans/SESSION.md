@@ -158,3 +158,8 @@ Real board: only read commands and `travel` were run (no write sent).
   danser's own key overlay. Live service not touched.
 - osu-render PR https://github.com/956zs/osu-render/pull/9 (CI green, not merged). Deploy = owner's call: install this
   aulactl (scripts/install.sh), merge, then build + restart osu-render in place.
+- 2026-11-01 owner decision: no built-in overlay in osu-render. osu-render PR #9 closed → PR
+  https://github.com/956zs/osu-render/pull/10 (generic plugins, API 1, docs/plugins.md). The overlay ships here as
+  `integrations/osu-render-plugin` (id aula-keys; zip via scripts/package-osu-render-plugin.sh); install with
+  `npm run plugin -- install <folder|zip>` in osu-render, restart. E2E (port 3031, real Star session): 48/50 danser
+  K1 onsets at 0/+1 frame; chained with the example border plugin OK.
