@@ -40,7 +40,7 @@ fn main() {
         .chain(QML_SINGLETONS.iter().map(|f| QmlFile::from(*f).singleton(true)));
     let builder = CxxQtBuilder::new_qml_module(QmlModule::new("AulaGui").qml_files(files))
         .qt_module("Quick")
-        .files(["src/bridge/device.rs", "src/bridge/i18n.rs", "src/bridge/keys.rs", "src/bridge/theme.rs"]);
+        .files(["src/bridge/device.rs", "src/bridge/i18n.rs", "src/bridge/keys.rs", "src/bridge/sessions.rs", "src/bridge/theme.rs"]);
     // SAFETY: only adds a warning flag. GCC 16 warns about QChar inside the Qt headers.
     let builder = unsafe {
         builder.cc_builder(|cc| {

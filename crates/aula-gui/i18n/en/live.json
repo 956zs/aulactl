@@ -21,5 +21,14 @@
   "live.cal_stop_live": "Stop the live view first.",
   "live.cal_finished": "Calibration finished and saved.",
   "live.cal_failed": "Calibration failed (code %1). Try again.",
-  "live.cal_unknown": "The keyboard did not report a result. Check the keys in the live view."
+  "live.cal_unknown": "The keyboard did not report a result. Check the keys in the live view.",
+  "live.sessions": "Recorded sessions",
+  "live.sessions_help": "Sessions recorded by \"aulactl feed --record\" (the aula_keys module records while osu! runs). Report aligns a session with its replay exported from osu!lazer (~/.local/share/osu/exports) and opens the result in the browser.",
+  "live.sessions_empty": "No recorded sessions yet.",
+  "live.sessions_refresh": "Refresh",
+  "live.sessions_report": "Report",
+  "live.sessions_line": "%1 · %2 · %3 presses",
+  "live.sessions_working": "Writing the report…",
+  "live.sessions_opened": "Report opened: %1",
+  "live.sessions_failed": "No report: %1"
 }

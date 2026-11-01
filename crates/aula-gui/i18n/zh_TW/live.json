@@ -21,5 +21,14 @@
   "live.cal_stop_live": "請先停止即時檢視。",
   "live.cal_finished": "校準完成並已儲存。",
   "live.cal_failed": "校準失敗（代碼 %1），請再試一次。",
-  "live.cal_unknown": "鍵盤沒有回報結果，請在即時檢視中檢查按鍵。"
+  "live.cal_unknown": "鍵盤沒有回報結果，請在即時檢視中檢查按鍵。",
+  "live.sessions": "錄製的工作階段",
+  "live.sessions_help": "由「aulactl feed --record」錄下的按鍵資料（aula_keys 模組會在 osu! 執行時錄製）。「報告」會把工作階段和 osu!lazer 匯出的回放（~/.local/share/osu/exports）對齊，並在瀏覽器中開啟結果。",
+  "live.sessions_empty": "還沒有錄製的工作階段。",
+  "live.sessions_refresh": "重新整理",
+  "live.sessions_report": "報告",
+  "live.sessions_line": "%1 · %2 · %3 次按壓",
+  "live.sessions_working": "正在產生報告…",
+  "live.sessions_opened": "已開啟報告：%1",
+  "live.sessions_failed": "無法產生報告：%1"
 }

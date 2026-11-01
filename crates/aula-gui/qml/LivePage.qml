@@ -19,11 +19,24 @@ ScrollView {
     property var tested: []
     property var events: []
     property string calibrationMessage
+    property string sessionMessage
+    readonly property var sessions: JSON.parse(Sessions.sessionsJson)
 
     readonly property bool current: StackLayout.isCurrentItem && visible
 
     // Always sent: Device.live may still be false for a stream that is starting; the worker ignores it when idle.
-    onCurrentChanged: if (!current) Device.stopLive()
+    onCurrentChanged: {
+        if (!current)
+            Device.stopLive()
+        else
+            Sessions.refresh()
+    }
+
+    // m:ss of milliseconds.
+    function duration(ms) {
+        const s = Math.round(ms / 1000)
+        return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0")
+    }
 
     // Heat colour for a depth fraction: green (shallow) through yellow to red (bottomed out).
     function rampColor(f) {
@@ -59,6 +72,13 @@ ScrollView {
         function onCalibratingChanged() {
             if (Device.calibrating)
                 page.calibrationMessage = ""
+        }
+    }
+
+    Connections {
+        target: Sessions
+        function onReportDone(ok, message) {
+            page.sessionMessage = I18n.text(ok ? "live.sessions_opened" : "live.sessions_failed").arg(message)
         }
     }
 
@@ -342,6 +362,89 @@ ScrollView {
                     font.weight: Font.Medium
                     color: Theme.surfaceContent
                 }
+            }
+        }
+
+        // Recorded feed sessions and their osu! replay reports (files only, no keyboard needed).
+        Card {
+            Layout.fillWidth: true
+            title: I18n.text("live.sessions")
+            icon: "history"
+
+            Label {
+                Layout.fillWidth: true
+                text: I18n.text("live.sessions_help")
+                wrapMode: Text.Wrap
+                font.pixelSize: 13
+                color: Theme.surfaceVariantContent
+            }
+
+            TonalButton {
+                icon: "refresh"
+                text: I18n.text("live.sessions_refresh")
+                onClicked: Sessions.refresh()
+            }
+
+            Label {
+                visible: page.sessions.length === 0
+                text: I18n.text("live.sessions_empty")
+                color: Theme.surfaceVariantContent
+            }
+
+            Repeater {
+                model: page.sessions
+
+                RowLayout {
+                    required property var modelData
+                    Layout.fillWidth: true
+                    spacing: 12
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 2
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: modelData.error ? modelData.file
+                                : (modelData.label.length > 0 ? modelData.label : modelData.file)
+                            elide: Text.ElideRight
+                            font.weight: Font.Medium
+                            color: Theme.surfaceContent
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: modelData.error ? modelData.error
+                                : I18n.text("live.sessions_line")
+                                      .arg(new Date(modelData.start).toLocaleString(Qt.locale(), "yyyy-MM-dd HH:mm"))
+                                      .arg(page.duration(modelData.duration))
+                                      .arg(modelData.presses)
+                            elide: Text.ElideRight
+                            font.pixelSize: 13
+                            color: Theme.surfaceVariantContent
+                        }
+                    }
+
+                    TonalButton {
+                        visible: !modelData.error
+                        enabled: !Sessions.working
+                        icon: "description"
+                        text: I18n.text("live.sessions_report")
+                        onClicked: {
+                            page.sessionMessage = I18n.text("live.sessions_working")
+                            Sessions.report(modelData.file)
+                        }
+                    }
+                }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                visible: page.sessionMessage.length > 0
+                text: page.sessionMessage
+                wrapMode: Text.Wrap
+                font.weight: Font.Medium
+                color: Theme.surfaceContent
             }
         }
     }
