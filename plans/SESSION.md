@@ -156,3 +156,5 @@ Real board: only read commands and `travel` were run (no write sent).
   encoder fallback to libx264), options keyOverlay/Corner/Scale/Opacity, `/health keyOverlay`, UI + i18n, README x3.
   E2E on a test instance (port 3031, synthetic sessions): nomod quickstart, HDDT, full intro all within 0..1 frame of
   danser's own key overlay. Live service not touched.
+- osu-render PR https://github.com/956zs/osu-render/pull/9 (CI green, not merged). Deploy = owner's call: install this
+  aulactl (scripts/install.sh), merge, then build + restart osu-render in place.
